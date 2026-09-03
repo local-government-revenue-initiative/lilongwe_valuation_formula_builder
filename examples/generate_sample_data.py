@@ -47,7 +47,7 @@ for i in range(1, 41):
     imp *= math.exp(random.gauss(0, 0.18))
     lnd = 3000 * land ** 0.85 * ZONE_F[zone] * ROAD_F[road] * (1.12 if water else 1.0)
     lnd *= math.exp(random.gauss(0, 0.18))
-    sampled = i % 2 == 0  # half the properties carry valuer sample values
+    sampled = True  # every property carries valuer sample values (blank some cells to test unsampled properties)
     rows.append({
         "PlotNo": f"SYN-{i:03d}",
         "Description": f"Synthetic {struct.lower()} {i}",

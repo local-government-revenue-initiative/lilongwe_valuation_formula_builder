@@ -1,41 +1,41 @@
 PlotNo,Description,Zone,Latitude,Longitude,Built_Area_m2,Land_Area_m2,Floors,Structure_Type,Wall_Material,Roof_Material,Road_Access,Piped_Water,Fence,Land_Value_MWK,Improvement_Value_MWK
-SYN-001,Synthetic dwelling 1,Area 25,-13.968804,33.810732,176.0,580.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,,
+SYN-001,Synthetic dwelling 1,Area 25,-13.968804,33.810732,176.0,580.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,"678,000","2,072,000"
 SYN-002,Synthetic dwelling 2,Area 3,-14.00525,33.752043,351.8,1576.3,2,Dwelling,Mud / unburnt brick,Iron sheet,Average,No,Yes,"1,999,000","3,692,000"
-SYN-003,Synthetic dwelling 3,Area 18,-13.973008,33.756496,83.1,491.6,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,No,Yes,,
+SYN-003,Synthetic dwelling 3,Area 18,-13.973008,33.756496,83.1,491.6,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,No,Yes,"400,000","1,147,000"
 SYN-004,Synthetic market / warehouse / industrial 4,Area 18,-13.950748,33.80566,262.1,859.2,1,Market / warehouse / industrial,Masonry / burnt brick / block,Iron sheet,Average,No,No,"872,000","4,069,000"
-SYN-005,Synthetic dwelling 5,Area 10,-13.943704,33.805396,224.8,837.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Good,No,No,,
+SYN-005,Synthetic dwelling 5,Area 10,-13.943704,33.805396,224.8,837.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Good,No,No,"1,466,000","2,990,000"
 SYN-006,Synthetic dwelling 6,Area 3,-13.973447,33.812519,157.0,623.0,1,Dwelling,Mud / unburnt brick,Concrete / tile,Good,No,Yes,"1,173,000","2,323,000"
-SYN-007,Synthetic shop / office 7,Area 25,-13.950445,33.786114,196.7,693.7,1,Shop / office,Mud / unburnt brick,Iron sheet,Bad,Yes,Yes,,
+SYN-007,Synthetic shop / office 7,Area 25,-13.950445,33.786114,196.7,693.7,1,Shop / office,Mud / unburnt brick,Iron sheet,Bad,Yes,Yes,"627,000","3,542,000"
 SYN-008,Synthetic dwelling 8,Area 18,-13.963881,33.741517,131.9,437.7,1,Dwelling,Mud / unburnt brick,Concrete / tile,Good,Yes,No,"850,000","1,390,000"
-SYN-009,Synthetic dwelling 9,Area 3,-13.969459,33.78762,71.0,270.2,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Bad,No,Yes,,
+SYN-009,Synthetic dwelling 9,Area 3,-13.969459,33.78762,71.0,270.2,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Bad,No,Yes,"349,000","1,928,000"
 SYN-010,Synthetic dwelling 10,Biwi,-13.958383,33.780778,57.3,196.5,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Average,Yes,No,"208,000","1,412,000"
-SYN-011,Synthetic shop / office 11,Area 18,-14.007362,33.785394,66.2,186.9,2,Shop / office,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,,
+SYN-011,Synthetic shop / office 11,Area 18,-14.007362,33.785394,66.2,186.9,2,Shop / office,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,"266,000","2,213,000"
 SYN-012,Synthetic shop / office 12,Area 10,-13.988526,33.78009,244.4,1020.1,1,Shop / office,Masonry / burnt brick / block,Thatch / other,Bad,Yes,No,"1,817,000","3,728,000"
-SYN-013,Synthetic dwelling 13,Kawale,-13.986411,33.792415,84.4,281.9,1,Dwelling,Mud / unburnt brick,Thatch / other,Average,Yes,No,,
+SYN-013,Synthetic dwelling 13,Kawale,-13.986411,33.792415,84.4,281.9,1,Dwelling,Mud / unburnt brick,Thatch / other,Average,Yes,No,"284,000","732,000"
 SYN-014,Synthetic dwelling 14,Area 18,-13.962875,33.740914,118.1,486.7,1,Dwelling,Mud / unburnt brick,Iron sheet,Average,Yes,Yes,"731,000","1,438,000"
-SYN-015,Synthetic dwelling 15,Kawale,-13.996215,33.770538,40.5,238.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,No,Yes,,
+SYN-015,Synthetic dwelling 15,Kawale,-13.996215,33.770538,40.5,238.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,No,Yes,"190,000","896,000"
 SYN-016,Synthetic dwelling 16,Area 3,-13.996198,33.762911,48.5,201.6,1,Dwelling,Mud / unburnt brick,Concrete / tile,Good,No,No,"326,000","882,000"
-SYN-017,Synthetic dwelling 17,Area 25,-13.948912,33.821035,111.4,528.4,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Bad,Yes,Yes,,
+SYN-017,Synthetic dwelling 17,Area 25,-13.948912,33.821035,111.4,528.4,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Bad,Yes,Yes,"539,000","2,227,000"
 SYN-018,Synthetic dwelling 18,Area 25,-13.959409,33.778877,78.9,422.5,1,Dwelling,Masonry / burnt brick / block,Thatch / other,Bad,No,No,"346,000","926,000"
-SYN-019,Synthetic dwelling 19,Area 3,-13.965172,33.827737,83.8,238.8,2,Dwelling,Masonry / burnt brick / block,Iron sheet,Average,Yes,No,,
+SYN-019,Synthetic dwelling 19,Area 3,-13.965172,33.827737,83.8,238.8,2,Dwelling,Masonry / burnt brick / block,Iron sheet,Average,Yes,No,"426,000","1,198,000"
 SYN-020,Synthetic dwelling 20,Biwi,-13.978874,33.805098,101.4,600.6,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Average,No,Yes,"596,000","2,237,000"
-SYN-021,Synthetic dwelling 21,Area 18,-13.945147,33.765651,132.7,696.1,1,Dwelling,Metal sheet / other,Iron sheet,Average,Yes,Yes,,
+SYN-021,Synthetic dwelling 21,Area 18,-13.945147,33.765651,132.7,696.1,1,Dwelling,Metal sheet / other,Iron sheet,Average,Yes,Yes,"653,000","1,099,000"
 SYN-022,Synthetic market / warehouse / industrial 22,Area 3,-13.979838,33.773254,247.0,962.3,1,Market / warehouse / industrial,Metal sheet / other,Iron sheet,Average,Yes,No,"1,753,000","1,917,000"
-SYN-023,Synthetic dwelling 23,Kawale,-13.958315,33.793117,77.3,254.2,1,Dwelling,Metal sheet / other,Concrete / tile,Bad,No,Yes,,
+SYN-023,Synthetic dwelling 23,Kawale,-13.958315,33.793117,77.3,254.2,1,Dwelling,Metal sheet / other,Concrete / tile,Bad,No,Yes,"208,000","1,123,000"
 SYN-024,Synthetic market / warehouse / industrial 24,Kawale,-13.944368,33.817106,191.9,860.0,1,Market / warehouse / industrial,Masonry / burnt brick / block,Thatch / other,Good,Yes,Yes,"707,000","1,443,000"
-SYN-025,Synthetic dwelling 25,Area 3,-13.956048,33.790423,78.3,468.3,1,Dwelling,Masonry / burnt brick / block,Thatch / other,Bad,Yes,Yes,,
+SYN-025,Synthetic dwelling 25,Area 3,-13.956048,33.790423,78.3,468.3,1,Dwelling,Masonry / burnt brick / block,Thatch / other,Bad,Yes,Yes,"729,000","1,163,000"
 SYN-026,Synthetic dwelling 26,Biwi,-14.001915,33.828331,34.7,113.2,1,Dwelling,Mud / unburnt brick,Iron sheet,Bad,Yes,Yes,"103,000","549,000"
-SYN-027,Synthetic market / warehouse / industrial 27,Kawale,-13.98545,33.758464,181.3,1079.9,2,Market / warehouse / industrial,Masonry / burnt brick / block,Iron sheet,Average,No,No,,
+SYN-027,Synthetic market / warehouse / industrial 27,Kawale,-13.98545,33.758464,181.3,1079.9,2,Market / warehouse / industrial,Masonry / burnt brick / block,Iron sheet,Average,No,No,"741,000","2,829,000"
 SYN-028,Synthetic dwelling 28,Area 25,-13.988907,33.799677,55.2,211.5,1,Dwelling,Mud / unburnt brick,Iron sheet,Average,Yes,No,"300,000","769,000"
-SYN-029,Synthetic dwelling 29,Biwi,-13.963658,33.748735,195.1,1055.6,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,,
+SYN-029,Synthetic dwelling 29,Biwi,-13.963658,33.748735,195.1,1055.6,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Bad,Yes,Yes,"893,000","2,962,000"
 SYN-030,Synthetic dwelling 30,Area 10,-13.950299,33.756432,200.8,1081.2,1,Dwelling,Mud / unburnt brick,Iron sheet,Good,No,Yes,"2,069,000","1,813,000"
-SYN-031,Synthetic dwelling 31,Area 25,-13.956283,33.740359,48.6,151.3,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Average,Yes,Yes,,
+SYN-031,Synthetic dwelling 31,Area 25,-13.956283,33.740359,48.6,151.3,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Average,Yes,Yes,"198,000","1,084,000"
 SYN-032,Synthetic dwelling 32,Kawale,-13.991939,33.827043,84.3,433.8,1,Dwelling,Mud / unburnt brick,Iron sheet,Average,No,No,"290,000","1,117,000"
-SYN-033,Synthetic dwelling 33,Area 3,-13.961098,33.759524,174.8,526.8,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Average,Yes,No,,
+SYN-033,Synthetic dwelling 33,Area 3,-13.961098,33.759524,174.8,526.8,1,Dwelling,Masonry / burnt brick / block,Concrete / tile,Average,Yes,No,"762,000","3,000,000"
 SYN-034,Synthetic dwelling 34,Biwi,-13.964869,33.794137,121.5,518.1,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Average,Yes,No,"416,000","2,016,000"
-SYN-035,Synthetic shop / office 35,Area 3,-13.958192,33.743103,164.7,912.2,1,Shop / office,Masonry / burnt brick / block,Concrete / tile,Average,Yes,No,,
+SYN-035,Synthetic shop / office 35,Area 3,-13.958192,33.743103,164.7,912.2,1,Shop / office,Masonry / burnt brick / block,Concrete / tile,Average,Yes,No,"1,440,000","3,921,000"
 SYN-036,Synthetic shop / office 36,Area 10,-13.948659,33.767804,130.5,458.4,2,Shop / office,Masonry / burnt brick / block,Iron sheet,Good,No,No,"1,091,000","3,110,000"
-SYN-037,Synthetic dwelling 37,Area 10,-13.970209,33.773682,78.0,244.5,1,Dwelling,Metal sheet / other,Iron sheet,Good,No,Yes,,
+SYN-037,Synthetic dwelling 37,Area 10,-13.970209,33.773682,78.0,244.5,1,Dwelling,Metal sheet / other,Iron sheet,Good,No,Yes,"400,000","857,000"
 SYN-038,Synthetic dwelling 38,Area 25,-13.971228,33.744274,65.5,378.4,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Good,Yes,No,"522,000","986,000"
-SYN-039,Synthetic dwelling 39,Area 3,-13.942905,33.766993,69.3,216.2,1,Dwelling,Masonry / burnt brick / block,Thatch / other,Bad,Yes,Yes,,
+SYN-039,Synthetic dwelling 39,Area 3,-13.942905,33.766993,69.3,216.2,1,Dwelling,Masonry / burnt brick / block,Thatch / other,Bad,Yes,Yes,"352,000","886,000"
 SYN-040,Synthetic dwelling 40,Kawale,-13.948313,33.796071,97.0,382.0,1,Dwelling,Masonry / burnt brick / block,Iron sheet,Average,No,Yes,"340,000","1,481,000"

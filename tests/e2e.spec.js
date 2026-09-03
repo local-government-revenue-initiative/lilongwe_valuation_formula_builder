@@ -44,7 +44,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
     if (header === 'Zone') await sels[1].selectOption('land');
   }
   await page.click('#import-confirm');
-  await page.waitForFunction(() => /40 properties, 20 with sample values/.test(document.querySelector('#property-count').textContent));
+  await page.waitForFunction(() => /40 properties, 40 with sample values/.test(document.querySelector('#property-count').textContent));
   const featureCount = await page.$$eval('#feature-table tbody tr', r => r.length);
   assert.equal(featureCount, 6, 'six characteristics imported');
 
