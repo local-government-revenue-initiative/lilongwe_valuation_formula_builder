@@ -84,6 +84,18 @@ r/reproduce_fit.R     tidyverse script that refits the exported models with lm()
 tests/                unit tests (node --test) and a Playwright browser test
 ```
 
+## Deployment
+
+The tool is a static site, so it can be hosted anywhere that serves files over HTTPS. `vercel.json` configures Vercel with no build step and standard security headers (geolocation stays allowed for the "Use device GPS" button).
+
+- **Vercel dashboard:** import the GitHub repository, choose framework preset "Other", leave the build command empty and set the output directory to `.`. Every push to the connected branch redeploys.
+- **Command line:** `npx vercel --prod` from the project folder.
+
+Two things to know about the hosted version:
+
+- Browser storage is per site. Work saved while opening `index.html` from a drive does not appear on the hosted URL, and the reverse. Use **Save project** and **Open project…** to move a project between the two.
+- Hosting the page does not put any council data on a server; everything still stays in each user's browser. If a login is needed later, that is the point to add a shared database (for example Supabase behind `js/storage.js`). Vercel's own password protection for the site is a paid feature.
+
 ## Development and testing
 
 ```

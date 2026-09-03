@@ -1,0 +1,5 @@
+node_modules
+tests
+r
+package.json
+.gitignore
