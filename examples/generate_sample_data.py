@@ -28,7 +28,9 @@ ROAD_F = {"Good": 1.15, "Average": 1.0, "Bad": 0.8}
 ZONE_F = {"Area 3": 1.4, "Area 10": 1.5, "Area 18": 1.0, "Area 25": 0.9, "Kawale": 0.7, "Biwi": 0.75}
 
 rows = []
-for i in range(1, 41):
+N_PROPERTIES = 250
+
+for i in range(1, N_PROPERTIES + 1):
     zone = random.choice(ZONES)
     struct = random.choice(STRUCT)
     wall = random.choice(WALL)

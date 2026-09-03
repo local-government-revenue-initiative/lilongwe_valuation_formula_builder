@@ -44,7 +44,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
     if (header === 'Zone') await sels[1].selectOption('land');
   }
   await page.click('#import-confirm');
-  await page.waitForFunction(() => /40 properties, 40 with sample values/.test(document.querySelector('#property-count').textContent));
+  await page.waitForFunction(() => /250 properties, 250 with sample values/.test(document.querySelector('#property-count').textContent));
   const featureCount = await page.$$eval('#feature-table tbody tr', r => r.length);
   assert.equal(featureCount, 6, 'six characteristics imported');
 
@@ -95,14 +95,14 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
 
   // ---- roll and export ---------------------------------------------------
   await page.click('.tabs button[data-tab="roll"]');
-  await page.waitForFunction(() => /40 of 40 properties valued/.test(document.querySelector('#roll-summary').textContent));
+  await page.waitForFunction(() => /250 of 250 properties valued/.test(document.querySelector('#roll-summary').textContent));
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-roll-csv')]);
   const csvPath = path.join(__dirname, 'out_valuation_roll.csv');
   await download.saveAs(csvPath);
   const csv = fs.readFileSync(csvPath, 'utf8');
   const header = csv.split(/\r?\n/)[0];
   for (const h of ['LandValue_formula', 'ImprovementValue_formula', 'TotalValue_formula', 'LandAreaSource', 'BuiltAreaSource']) assert.ok(header.includes(h), 'export has ' + h);
-  assert.equal(csv.trim().split(/\r?\n/).length, 41, '40 data rows exported');
+  assert.equal(csv.trim().split(/\r?\n/).length, 251, '250 data rows exported');
   fs.unlinkSync(csvPath);
   // land + improvement = total for every property
   const sums = await page.evaluate(() => window.App.rollExportRows().rows.map(r => [r.LandValue_formula, r.ImprovementValue_formula, r.TotalValue_formula]));
@@ -138,7 +138,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   // ---- persistence across reload ----------------------------------------
   await page.waitForTimeout(700);
   await page.reload();
-  await page.waitForFunction(() => window.App.state.project && window.App.state.project.properties.length === 40);
+  await page.waitForFunction(() => window.App.state.project && window.App.state.project.properties.length === 250);
   const persistedFit = await page.evaluate(() => window.App.state.project.models.land.fit && window.App.state.project.models.land.fit.ok);
   assert.ok(persistedFit, 'fitted model survives reload');
 
