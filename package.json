@@ -1,0 +1,15 @@
+{
+  "name": "lilongwe-valuation-formula-builder",
+  "version": "0.1.0",
+  "description": "Browser-based points-based (CAMA) property valuation formula builder for Lilongwe City Council",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/engine.test.js",
+    "test:e2e": "node tests/e2e.spec.js",
+    "serve": "npx serve ."
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lilongwe Valuation Formula Builder</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet-draw/leaflet.draw.css">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <strong>Lilongwe Valuation Formula Builder</strong>
+    <span class="muted">Lilongwe City Council · points-based (CAMA) valuation</span>
+  </div>
+  <div class="topbar-controls">
+    <label>Project <input id="project-name" type="text" placeholder="Project name"></label>
+    <label>Currency <input id="currency" type="text" size="5" value="MWK"></label>
+    <label>Value basis
+      <select id="value-basis">
+        <option value="annual_rental">Annual rental value</option>
+        <option value="capital">Capital (market) value</option>
+      </select>
+    </label>
+    <button id="btn-new" class="secondary" title="Start an empty project (current work is discarded)">New</button>
+    <button id="btn-open" class="secondary" title="Open a saved project (.json)">Open project…</button>
+    <button id="btn-save" title="Save the whole project, including photos, as a .json file">Save project</button>
+    <input id="file-open" type="file" accept=".json,application/json" hidden>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="properties" class="active">1. Properties</button>
+  <button data-tab="features">2. Characteristics</button>
+  <button data-tab="models">3. Models &amp; weights</button>
+  <button data-tab="roll">4. Valuation roll</button>
+  <button data-tab="notes">Notes &amp; legal</button>
+</nav>
+
+<main>
+  <!-- ---------------------------------------------------------------- -->
+  <section id="tab-properties" class="tab active">
+    <div class="toolbar">
+      <button id="btn-import">Import CSV / XLSX…</button>
+      <input id="file-import" type="file" accept=".csv,.xlsx,.xls,.txt" hidden>
+      <button id="btn-add-property" class="secondary">Add property</button>
+      <button id="btn-delete-property" class="secondary danger">Delete selected</button>
+      <button id="btn-split-totals" class="secondary" title="For properties where only a total value was entered, split it into land and improvement values using a land share you choose">Split entered totals…</button>
+      <button id="btn-fit-map" class="secondary">Show all on map</button>
+      <input id="property-search" type="search" placeholder="Search plot, description, zone…">
+      <span id="property-count" class="muted"></span>
+    </div>
+    <div class="split">
+      <div class="pane list-pane">
+        <div class="table-wrap">
+          <table id="property-table" class="compact">
+            <thead>
+              <tr>
+                <th>Plot no.</th><th>Description</th><th>Zone</th>
+                <th class="num">Built m²</th><th class="num">Land m²</th>
+                <th class="num">Land value</th><th class="num">Improvement value</th>
+                <th>Located</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="pane detail-pane">
+        <div id="map"></div>
+        <div class="map-tools">
+          <button id="tool-pin" class="secondary" title="Click on the map to place the property's location">Drop pin</button>
+          <button id="tool-locate" class="secondary" title="Use this device's GPS position">Use device GPS</button>
+          <button id="tool-roof" class="secondary" title="Draw around one building's rooftop; click the first point again to finish">Trace rooftop</button>
+          <button id="tool-parcel" class="secondary" title="Draw around the land parcel boundary">Trace parcel</button>
+          <button id="tool-cancel" class="secondary">Cancel drawing</button>
+          <span class="muted small">Use the edit / delete tools on the map to adjust shapes.</span>
+        </div>
+        <div id="property-detail" class="detail">
+          <p class="muted">Select a property from the list, add one, or import a file.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section id="tab-features" class="tab">
+    <div class="toolbar">
+      <button id="btn-add-feature">Add characteristic</button>
+      <button id="btn-zone-feature" class="secondary" title="Uses each property's Zone field as a location characteristic in the land model">Use Zone field as a land characteristic</button>
+      <button id="btn-suggest-features" class="secondary" title="Adds a generic starter list adapted from the LoGRI guidance note (Appendix 2). Edit or delete freely.">Add suggested starter list</button>
+      <span class="muted">Characteristics are the externally observable features that enter the formula. Each applies to the land model, the improvement (building) model, or both.</span>
+    </div>
+    <div class="table-wrap">
+      <table id="feature-table">
+        <thead><tr><th>Name</th><th>Type</th><th>Applies to</th><th>Categories (comma separated) / base category</th><th>Condition variable?</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="notice" id="condition-notice" hidden>
+      <strong>Legal flag:</strong> at least one characteristic is marked as a condition variable. The Local Government Act values improvements assuming "reasonable condition"; whether actual condition is a permitted formula input is unresolved. Keep the registered valuer's decision on this documented.
+    </p>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section id="tab-models" class="tab">
+    <p class="muted">Two models are fitted separately, so land value and improvement value are reported separately as required by LGA s.68(1). Each model uses only the sample properties that have a value entered for it. Weights refit automatically whenever a setting changes.</p>
+    <div class="models">
+      <div class="model-card" id="model-land" data-model="land"></div>
+      <div class="model-card" id="model-improvement" data-model="improvement"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section id="tab-roll" class="tab">
+    <div class="toolbar">
+      <button id="btn-export-roll-csv">Export roll (CSV)</button>
+      <button id="btn-export-roll-xlsx" class="secondary">Export roll (XLSX)</button>
+      <button id="btn-export-weights" class="secondary">Export weights (CSV)</button>
+      <button id="btn-export-report" class="secondary">Model report (printable)</button>
+      <span id="roll-summary" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="roll-table" class="compact">
+        <thead>
+          <tr>
+            <th>Plot no.</th><th>Description</th><th>Zone</th>
+            <th class="num">Land m²</th><th class="num">Built m²</th>
+            <th class="num">Land value</th><th class="num">Improvement value</th><th class="num">Total value</th>
+            <th class="num">Sample total</th><th class="num">Ratio</th><th>Flags</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section id="tab-notes" class="tab">
+    <div class="prose">
+      <h2>How the tool works</h2>
+      <ol>
+        <li><strong>Properties.</strong> Import the asset list or add properties by hand. Locate each one on the map, trace the rooftop(s) and enter floors to get built area, and trace the parcel boundary to get land area. Areas can also be typed in. Add photos for identification and appeals.</li>
+        <li><strong>Characteristics.</strong> Define the externally observable features (wall, roof, road access, structure type, and so on). Keep the list short and the categories few; merge rare categories.</li>
+        <li><strong>Sample values.</strong> For a sample of properties (LoGRI experience: 2–10 % of the stock, and at least a few dozen), a registered valuer enters a land value and an improvement value. Other properties are left blank.</li>
+        <li><strong>Models and weights.</strong> The tool fits ordinary least squares regressions of value on area and characteristics, one for land and one for improvements, and shows the weights with their statistical confidence and the fit statistics (R², RMSE, leave-one-out RMSE, COD, PRD). Any weight can be locked to a value chosen by the council; the tool then refits the remaining weights around it and shows the cost in R².</li>
+        <li><strong>Valuation roll.</strong> The formula is applied to every property. Land, improvement and total values are exported separately, together with a per-property calculation sheet that a taxpayer can check by hand.</li>
+      </ol>
+
+      <h2>Model forms</h2>
+      <ul>
+        <li><strong>Log-linear (default):</strong> ln(value) = base + w × area + Σ feature weights. Weights read as percentages. Each extra square metre multiplies value by the same factor, so value grows exponentially with area; check the fit at large areas.</li>
+        <li><strong>Log-log:</strong> ln(value) = base + w × ln(area) + Σ feature weights. The area weight is an exponent (0.5–1 is typical), which is the form used in LoGRI's guidance note and the Sierra Leone systems.</li>
+        <li><strong>Linear:</strong> value = base + w × area + Σ feature amounts. Everything in currency.</li>
+      </ul>
+      <p>Use "Compare forms" on each model to see R², RMSE and COD side by side before choosing.</p>
+
+      <h2>Legal points to keep visible</h2>
+      <ul>
+        <li><strong>LGA 1998 s.67 and Property Valuation Act 2024:</strong> valuation rolls must be prepared by a registered valuer. This tool supports a valuer's work; it does not replace the valuer's statutory role or certification.</li>
+        <li><strong>LGA s.68(1):</strong> every roll must show total value, land value and improvement value separately. The export does this.</li>
+        <li><strong>LGA s.68(2):</strong> post-2017 the basis is estimated rental value. The value basis setting records which basis the sample values use; use one basis consistently.</li>
+        <li><strong>Condition variables:</strong> the Act's "reasonable condition" wording leaves it unclear whether actual condition may enter the formula. Characteristics marked as condition variables raise a flag.</li>
+        <li><strong>PVA 2024 s.42 and Board approval:</strong> formal sanction of a mass-valuation method depends on ministerial regulations and Board of Valuers approval that were not confirmed as issued. The near-term route is a pilot on council-owned estates through an LGA s.66 supplementary roll.</li>
+        <li><strong>LGA s.73:</strong> valuers need not inspect interiors, which supports the exterior-only characteristic list used here.</li>
+      </ul>
+
+      <h2>Data and privacy</h2>
+      <p>Everything stays in this browser (IndexedDB) until you export it. Use "Save project" regularly and keep the file on council storage. Photos are resized to about 1024 px before storage. Satellite imagery needs an internet connection; everything else works offline.</p>
+    </div>
+  </section>
+</main>
+
+<!-- Import mapping dialog -->
+<dialog id="import-dialog">
+  <form method="dialog" id="import-form">
+    <h3>Import properties</h3>
+    <p class="muted" id="import-summary"></p>
+    <div class="dialog-columns">
+      <div>
+        <h4>Match columns to fields</h4>
+        <table id="import-mapping" class="compact"><tbody></tbody></table>
+      </div>
+      <div>
+        <h4>Other columns to import as characteristics</h4>
+        <table id="import-extras" class="compact"><thead><tr><th>Import</th><th>Column</th><th>Type</th><th>Applies to</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="import-replace"> Replace the current property list instead of adding to it</label>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" id="import-cancel">Cancel</button>
+      <button type="submit" id="import-confirm">Import</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Split totals dialog -->
+<dialog id="split-dialog">
+  <form method="dialog">
+    <h3>Split entered totals into land and improvement values</h3>
+    <p class="muted">Applies to properties that have a total value but no land or improvement value yet. The split is recorded in the property notes. This is a valuer's assumption, not a measurement.</p>
+    <label>Land share of total value (%) <input type="number" id="split-share" value="30" min="0" max="100" step="1"></label>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" id="split-cancel">Cancel</button>
+      <button type="submit" id="split-confirm">Apply</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Calculation sheet dialog -->
+<dialog id="sheet-dialog">
+  <div id="sheet-content"></div>
+  <div class="dialog-actions">
+    <button type="button" class="secondary" id="sheet-print">Print</button>
+    <button type="button" id="sheet-close">Close</button>
+  </div>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/leaflet-draw/leaflet.draw.js"></script>
+<script src="vendor/xlsx/xlsx.full.min.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/formula.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/io.js"></script>
+<script src="js/mapping.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
