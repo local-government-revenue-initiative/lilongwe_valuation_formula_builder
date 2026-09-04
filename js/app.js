@@ -13,7 +13,7 @@
   var MAX_ROWS = 500;
   var AREA_LABEL = 'Built area (m²)';
 
-  var state = { project: null, selectedId: null, filter: '', saveTimer: null, pendingImport: null, photoUrls: {}, currentTab: 'properties' };
+  var state = { project: null, selectedId: null, filter: '', saveTimer: null, pendingImport: null, photoUrls: {}, currentTab: 'properties', chartLog: true };
 
   /* ------------------------------------------------------------------ */
   /* Project model                                                       */
@@ -196,6 +196,29 @@
   }
 
   function valueOf(p) { return Valuation.valueProperty(state.project, p, modelForPrediction(), charsFor); }
+
+  /* ---- charts: valuer's building value vs the formula ---- */
+
+  function plotLabel(id) { var p = findProperty(id); return p ? (p.plotNo || id) : id; }
+
+  function scaleToggle(onChange) {
+    var t = el('div', { class: 'mode-toggle', id: 'chart-scale' }, [
+      el('button', { type: 'button', 'data-scale': 'log', class: state.chartLog ? 'on' : '', text: 'Log axes' }),
+      el('button', { type: 'button', 'data-scale': 'linear', class: state.chartLog ? '' : 'on', text: 'Linear axes' })
+    ]);
+    $all('button', t).forEach(function (b) { b.addEventListener('click', function () { state.chartLog = b.getAttribute('data-scale') === 'log'; onChange(); }); });
+    return t;
+  }
+
+  function fitChart(fit, opts) {
+    var pts = Charts.fitPoints(fit, plotLabel);
+    var res = Charts.scatter(Object.assign({ points: pts, log: state.chartLog, xLabel: 'Valuer\'s building value (total − land)', yLabel: 'Formula building value' }, opts || {}));
+    var box = el('div', { class: 'chart' + (opts && opts.compact ? ' small' : '') }, [res.svg]);
+    if (res.skipped) box.appendChild(el('p', { class: 'help', text: res.skipped + ' point(s) not shown on log axes because a value is zero or negative.' }));
+    return box;
+  }
+
+  function chartSubtitle(fit) { return fit && fit.ok ? 'n ' + fit.n + ' · RMSE ' + Charts.compact(fit.rmse) + ' · COD ' + fmt(fit.cod, 0) + ' %' : ''; }
 
   /* ------------------------------------------------------------------ */
   /* Properties tab                                                      */
@@ -605,6 +628,8 @@
     var stats = el('div', { class: 'stats-grid', id: 'model-stats' });
     Formula.fitSummary(fit, proj.currency).forEach(function (s) { stats.appendChild(el('div', { class: 'stat', title: s.help }, [el('div', { class: 'k', text: s.label }), el('div', { class: 'v', text: s.value })])); });
     card.appendChild(stats);
+    card.appendChild(el('div', { class: 'chart-tools' }, [el('span', { class: 'help', text: 'Each dot is a sample property: the valuer\'s building value across, the formula\'s value up. Dots on the line are matched exactly; the band marks ±20 %.' }), scaleToggle(renderModel)]));
+    card.appendChild(fitChart(fit, { title: 'Valuer vs formula – current settings', subtitle: chartSubtitle(fit), width: 620, height: 440 }));
     if (fit.excluded && fit.excluded.length) card.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: fit.excluded.length + ' sample propert' + (fit.excluded.length === 1 ? 'y' : 'ies') + ' excluded from the fit' }),
       el('ul', { class: 'drawer-body help' }, fit.excluded.map(function (x) { var p = findProperty(x.id); return el('li', { text: (p ? p.plotNo : x.id) + ': ' + x.reason }); }))]));
 
@@ -707,6 +732,17 @@
     t.appendChild(tb);
     box.appendChild(el('div', { class: 'table-scroll' }, [t]));
     box.appendChild(el('p', { class: 'help', text: '"Moved > 10 %" counts properties whose total value under that model differs by more than 10 % from the current settings. R² on the fit scale is not comparable between log and linear forms; compare RMSE, LOO RMSE and COD.' }));
+    // small multiples: valuer vs formula for every model, shared axes
+    var sets = entries.map(function (e) { return Charts.fitPoints(e.fit, plotLabel); });
+    var domain = Charts.sharedDomain(sets, state.chartLog);
+    box.appendChild(el('h3', { text: 'Valuer vs formula, model by model' }));
+    box.appendChild(el('div', { class: 'chart-tools' }, [el('span', { class: 'help', text: 'Same axes on every plot. The closer the dots sit to the line, the better the model reproduces the valuer\'s figures; a tilt away from the line means large or small properties are systematically over- or under-valued.' }), scaleToggle(renderModel)]));
+    var grid = el('div', { class: 'chart-grid', id: 'compare-charts' });
+    entries.forEach(function (e, k) {
+      var res = Charts.scatter({ points: sets[k], log: state.chartLog, domain: domain, compact: true, width: 320, height: 300, title: e.name, subtitle: chartSubtitle(e.fit), xLabel: 'Valuer', yLabel: 'Formula' });
+      grid.appendChild(el('div', { class: 'chart small' }, [res.svg]));
+    });
+    box.appendChild(grid);
     // weights matrix
     var wm = Formula.weightsMatrix(entries, proj.currency);
     var wt = el('table', { class: 'data compact compare-weights', id: 'compare-weights' });
@@ -829,7 +865,11 @@
       el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Total' }), el('div', { class: 'v', text: money(totals.total) })])
     ]);
     box.appendChild(el('div', { class: 'results-headline' }, [lead, statRow]));
-    if (fit && fit.ok) box.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: 'Weights in the building formula' }), el('div', { class: 'drawer-body table-scroll' }, [weightsTable(fit, false)])]));
+    if (fit && fit.ok) {
+      box.appendChild(el('details', { class: 'drawer', open: true }, [el('summary', { text: 'How close is the formula to the valuer?' }),
+        el('div', { class: 'drawer-body' }, [el('p', { class: 'help', text: 'Each dot is one sample property. Across: the building value implied by the valuer (total minus land). Up: the formula\'s building value. Dots on the line match exactly; the band marks ±20 %.' }), fitChart(fit, { title: 'Valuer vs formula', subtitle: chartSubtitle(fit), width: 620, height: 400 })])]));
+      box.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: 'Weights in the building formula' }), el('div', { class: 'drawer-body table-scroll' }, [weightsTable(fit, false)])]));
+    }
 
     var tbody = $('#roll-table tbody');
     tbody.innerHTML = '';
@@ -908,6 +948,8 @@
       Formula.weightsTable(fit, proj.currency).forEach(function (w) { if (w.status === 'excluded') return; h.push('<tr><td>' + esc(w.column.label) + (w.column.isBase ? ' (base)' : '') + '</td><td class="num">' + (w.column.kind === 'category' ? w.count : '') + '</td><td class="num">' + esc(w.weightText) + '</td><td class="num">' + (w.se === null ? '–' : fmt(w.se, 4)) + '</td><td class="num">' + esc(Formula.fmtP(w.p)) + '</td><td>' + esc(w.significance.label) + '</td></tr>'); });
       h.push('</table>');
       if (fit.warnings.length) h.push('<p><b>Checks:</b></p><ul>' + fit.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
+      var chart = Charts.scatter({ points: Charts.fitPoints(fit, plotLabel), log: true, title: 'Valuer vs formula (building value, log axes)', subtitle: chartSubtitle(fit), width: 620, height: 440, xLabel: 'Valuer\'s building value (total − land)', yLabel: 'Formula building value' });
+      h.push('<div style="max-width:620px">' + new XMLSerializer().serializeToString(chart.svg) + '</div><p class="muted">Each dot is a sample property; the line marks equality and the outer lines ±20 %.</p>');
     }
     if (proj.savedModels && proj.savedModels.length) {
       var cmpR = Valuation.compareModels(proj, comparisonEntries(), charsFor);

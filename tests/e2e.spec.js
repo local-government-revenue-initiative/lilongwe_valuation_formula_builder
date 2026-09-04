@@ -93,6 +93,14 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   await fenceRow.locator('input[type="number"]').dispatchEvent('change');
   await page.waitForFunction(() => { const f = window.App.state.project.model.fit; const j = f.columns.findIndex(c => c.label === 'Fence'); return f.status[j] === 'locked' && Math.abs(Math.exp(f.coef[j]) - 1.10) < 1e-9; });
   assert.ok(/R² without locks/.test(await page.textContent('#model-stats')), 'unconstrained R² shown when a lock is active');
+  // scatter plot of valuer vs formula: one dot per sample property, toggle to linear axes
+  const nFit = await page.evaluate(() => window.App.state.project.model.fit.n);
+  assert.equal(await page.$$eval('#model-card svg.scatter circle.dot', d => d.length), nFit, 'one dot per sample property');
+  await page.click('#model-card #chart-scale button[data-scale="linear"]');
+  await page.waitForFunction(() => window.App.state.chartLog === false);
+  assert.equal(await page.$$eval('#model-card svg.scatter circle.dot', d => d.length), nFit, 'dots survive the axis toggle');
+  await page.click('#model-card #chart-scale button[data-scale="log"]');
+  await page.waitForFunction(() => window.App.state.chartLog === true);
   await page.selectOption('#form-select', 'loglog');
   await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglog');
   await page.click('#compare-forms');
@@ -111,6 +119,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   await page.click('#btn-save-model');
   await page.waitForFunction(() => document.querySelectorAll('#compare-stats tbody tr').length === 3);
   assert.equal(await page.$$eval('#compare-weights thead th', r => r.length), 4, 'term column + three models');
+  assert.equal(await page.$$eval('#compare-charts svg.scatter', s => s.length), 3, 'one small-multiple plot per model');
   const moved = await page.$$eval('#compare-stats tbody tr', rows => rows.map(r => r.children[13].textContent));
   assert.equal(moved[0], 'reference');
   assert.ok(/%/.test(moved[1]) && /%/.test(moved[2]), 'moved share shown for saved models');
@@ -122,6 +131,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   assert.equal(cmpDownload.suggestedFilename(), 'model_comparison.xlsx');
   await page.click('.tabs button[data-tab="results"]');
   await page.waitForFunction(() => /Active model: Log-linear, fence locked/.test(document.querySelector('#results-summary').textContent));
+  assert.equal(await page.$$eval('#results-summary svg.scatter circle.dot', d => d.length), await page.evaluate(() => window.App.state.project.model.fit.n), 'results tab shows the plot');
 
   // ---- export ------------------------------------------------------------
   await page.click('.tabs button[data-tab="results"]');

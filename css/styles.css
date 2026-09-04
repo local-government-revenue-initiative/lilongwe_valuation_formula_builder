@@ -191,6 +191,13 @@ dialog h3 { margin-top: 0; }
 .dialog-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 @media (max-width: 800px) { .dialog-columns { grid-template-columns: 1fr; } }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.chart { margin: 10px 0; }
+.chart svg { display: block; width: 100%; height: auto; max-width: 620px; font-family: var(--font-body); }
+.chart.small svg { max-width: none; }
+.chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 10px 0; }
+.chart-grid .chart { margin: 0; }
+.chart .hit { cursor: pointer; outline: none; }
+.chart-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .compare-weights td:first-child, .compare-weights th:first-child { position: sticky; left: 0; background: var(--paper); z-index: 2; min-width: 200px; }
 .compare-weights th:first-child { background: var(--green); z-index: 3; }
 .compare-weights td .badge { margin-left: 6px; }
