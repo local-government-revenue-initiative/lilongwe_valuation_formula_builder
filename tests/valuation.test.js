@@ -150,6 +150,19 @@ test('compareModels reports totals, moved share and per-property values', () => 
   assert.equal(cmp.entries[0].terms, 2);
 });
 
+test('weightsMatrix lists each term once with a cell per model', () => {
+  const Formula = require('../js/formula.js');
+  const columns = Engine.buildColumns('linear', [{ id: 'fence', name: 'Fence', type: 'boolean' }], [], 'Built area');
+  const mk = (coef, status) => ({ ok: true, form: 'linear', columns, coef, smearing: 1, status, se: [1, 1, 1], t: [1, 1, 1], p: [0.01, 0.01, 0.5] });
+  const a = mk([1000, 500, 20], ['free', 'free', 'free']);
+  const b = mk([900, 550, 0], ['free', 'free', 'excluded']);
+  const m = Formula.weightsMatrix([{ name: 'A', fit: a }, { name: 'B', fit: b }], 'MWK');
+  assert.deepEqual(m.names, ['A', 'B']);
+  assert.deepEqual(m.rows.map(r => r.key), ['intercept', 'area', 'f:fence']);
+  assert.ok(m.rows[0].cells[0] && m.rows[0].cells[1], 'base value has a cell for both models');
+  assert.equal(m.rows[2].cells[1], null, 'excluded term shows no cell');
+});
+
 test('a version-1 project migrates to the single-model layout', () => {
   const old = { version: 1, models: { land: {}, improvement: { form: 'loglog', locks: { 'f:fence': 10 } } }, properties: [{ id: 'x', landValue: 100, improvementValue: 250 }, { id: 'y', totalValueEntered: 900 }] };
   const p = Valuation.migrateProject(old, DEFAULTS);

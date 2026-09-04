@@ -209,7 +209,7 @@
       weightsTable(e.fit, currency).forEach(function (w) {
         if (w.status === 'excluded') return;
         var key = w.column.key;
-        if (!index[key]) { index[key] = rows.length; rows.push({ key: key, label: w.column.label + (w.column.isBase ? ' (base)' : ''), cells: entries.map(function () { return null; }) }); }
+        if (index[key] === undefined) { index[key] = rows.length; rows.push({ key: key, label: w.column.label + (w.column.isBase ? ' (base)' : ''), cells: entries.map(function () { return null; }) }); }
         rows[index[key]].cells[k] = { text: w.weightText, code: w.significance.code, label: w.significance.label };
       });
     });
