@@ -14,9 +14,9 @@
     { key: 'builtArea_m2', label: 'Built area (m²)', patterns: [/built.?area/i, /floor.?area/i, /building.?area/i, /gfa/i, /^area/i, /surface/i] },
     { key: 'landArea_m2', label: 'Land / parcel area (m²)', patterns: [/land.?area/i, /plot.?area/i, /parcel/i, /site.?area/i, /land.?size/i] },
     { key: 'floors', label: 'Number of floors', patterns: [/floor(s)?$/i, /storey/i, /stories/i, /levels/i] },
-    { key: 'landValue', label: 'Land value (sample)', patterns: [/land.?val/i, /site.?val/i] },
-    { key: 'improvementValue', label: 'Improvement / building value (sample)', patterns: [/improv/i, /building.?val/i, /structure.?val/i] },
-    { key: 'totalValueEntered', label: 'Total value (sample, if not split)', patterns: [/rateable/i, /total.?val/i, /^value/i, /estimated.?val/i, /market.?val/i, /rental/i] },
+    { key: 'areaId', label: 'LCC Area number', patterns: [/^lcc.?area/i, /^area.?(id|no|number)/i, /^area$/i] },
+    { key: 'sectorKey', label: 'LCC Sector (e.g. 46/1)', patterns: [/^sector/i] },
+    { key: 'totalValue', label: 'Total value (valuer sample)', patterns: [/total.?val/i, /rateable/i, /^value/i, /estimated.?val/i, /market.?val/i, /rental.?val/i, /valuer/i] },
     { key: 'notes', label: 'Notes', patterns: [/note/i, /comment/i, /remark/i] }
   ];
 
@@ -25,9 +25,10 @@
       var r = new FileReader();
       r.onload = function () {
         try {
-          var wb = root.XLSX.read(r.result, { type: 'array', raw: false, cellDates: false });
+          // raw: true keeps CSV cells as typed text, so plot numbers such as 7/001 are not read as dates
+          var wb = root.XLSX.read(r.result, { type: 'array', raw: true, cellDates: false });
           var ws = wb.Sheets[wb.SheetNames[0]];
-          var aoa = root.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+          var aoa = root.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
           // drop fully empty rows
           aoa = aoa.filter(function (row) { return row.some(function (v) { return String(v).trim() !== ''; }); });
           if (!aoa.length) return reject(new Error('The file is empty.'));
@@ -92,7 +93,7 @@
       var id = slug(col.header);
       var n = 1;
       while ((existingFeatures || []).concat(newFeatures).some(function (f) { return f.id === id; })) id = slug(col.header) + '_' + (++n);
-      var f = { id: id, name: col.header, type: col.type, appliesTo: col.appliesTo || 'improvement', categories: [], baseCategory: null, isCondition: /condition|state of repair|quality/i.test(col.header) };
+      var f = { id: id, name: col.header, type: col.type, appliesTo: 'improvement', categories: [], baseCategory: null, isCondition: /condition|state of repair|quality/i.test(col.header) };
       if (col.type === 'categorical') {
         var cats = {};
         parsed.rows.forEach(function (r) { var v = r[col.header]; if (v !== '') cats[v] = true; });
@@ -107,7 +108,8 @@
         plotNo: '', description: '', zone: '', lat: null, lng: null,
         roofPolygons: [], builtArea_m2: null, builtAreaSource: null, floors: null,
         parcelPolygon: null, landArea_m2: null, landAreaSource: null,
-        landValue: null, improvementValue: null, totalValueEntered: null,
+        areaId: null, sectorKey: null, locationSource: null, landRateOverride: null,
+        totalValue: null,
         characteristics: {}, photoIds: [], notes: ''
       };
       function get(key) { var h = mapping[key]; return h ? r[h] : ''; }
@@ -121,9 +123,11 @@
       p.builtArea_m2 = E.toNumber(get('builtArea_m2')); if (p.builtArea_m2 !== null) p.builtAreaSource = 'imported';
       p.landArea_m2 = E.toNumber(get('landArea_m2')); if (p.landArea_m2 !== null) p.landAreaSource = 'imported';
       p.floors = E.toNumber(get('floors'));
-      p.landValue = E.toNumber(get('landValue'));
-      p.improvementValue = E.toNumber(get('improvementValue'));
-      p.totalValueEntered = E.toNumber(get('totalValueEntered'));
+      p.totalValue = E.toNumber(get('totalValue'));
+      var aid = get('areaId'); var aidNum = E.toNumber(String(aid).replace(/^area\s*/i, ''));
+      if (aidNum !== null) { p.areaId = Math.round(aidNum); p.locationSource = 'imported'; }
+      var sk = String(get('sectorKey') || '').trim();
+      if (sk) { p.sectorKey = sk; if (p.areaId === null) { var m = sk.match(/^(\d+)/); if (m) p.areaId = parseInt(m[1], 10); } p.locationSource = 'imported'; }
       Object.keys(featureByHeader).forEach(function (h) {
         var f = featureByHeader[h];
         var v = r[h];
@@ -155,5 +159,29 @@
     root.XLSX.writeFile(wb, filename, { bookType: 'xlsx' });
   }
 
-  root.IO = { FIELDS: FIELDS, readFile: readFile, guessMapping: guessMapping, detectType: detectType, applyMapping: applyMapping, downloadTable: downloadTable, downloadWorkbook: downloadWorkbook };
+  /*
+   * Parse a land-rate schedule file: columns Area (or Sector), Rate, Source, Note.
+   * Returns { level, entries: { key: { rate, source, note } }, skipped }
+   */
+  function parseRates(parsed) {
+    var E = root.Engine;
+    var h = parsed.headers;
+    function find(res) { for (var i = 0; i < h.length; i++) if (res.some(function (re) { return re.test(h[i]); })) return h[i]; return null; }
+    var keyCol = find([/^sector/i]) ? find([/^sector/i]) : find([/^area/i, /^key/i, /^zone/i]);
+    var level = /^sector/i.test(keyCol || '') ? 'sector' : 'area';
+    var rateCol = find([/rate/i, /per.?m/i, /value/i]);
+    var srcCol = find([/source/i]);
+    var noteCol = find([/note/i, /comment/i]);
+    if (!keyCol || !rateCol) throw new Error('The file needs an Area (or Sector) column and a Rate column.');
+    var entries = {}, skipped = 0;
+    parsed.rows.forEach(function (r) {
+      var key = String(r[keyCol] || '').trim().replace(/^area\s*/i, '').replace(/^sector\s*/i, '');
+      var rate = E.toNumber(r[rateCol]);
+      if (!key || rate === null) { skipped++; return; }
+      entries[key] = { rate: rate, source: srcCol ? String(r[srcCol] || '') : 'imported', note: noteCol ? String(r[noteCol] || '') : '' };
+    });
+    return { level: level, entries: entries, skipped: skipped };
+  }
+
+  root.IO = { FIELDS: FIELDS, readFile: readFile, guessMapping: guessMapping, detectType: detectType, applyMapping: applyMapping, parseRates: parseRates, downloadTable: downloadTable, downloadWorkbook: downloadWorkbook };
 }(typeof self !== 'undefined' ? self : this));

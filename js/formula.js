@@ -168,9 +168,39 @@
     return out;
   }
 
+  /*
+   * Land lines for the calculation sheet.
+   * lv = result of Valuation.landValueFor(project, property)
+   */
+  function landSheet(lv, currency) {
+    if (!lv || lv.value === null) return { ok: false, lines: [], value: null, valueText: '–', notes: [lv && lv.reason ? lv.reason : 'no land area'] };
+    var ri = lv.rateInfo;
+    var lines = [
+      { label: 'Land rate', detail: ri.label + (ri.uplift && ri.uplift !== 1 ? ' × uplift ' + fmtNum(ri.uplift, 2) : '') + (ri.source ? ' (' + ri.source + ')' : ''), factorText: fmtMoney(ri.rate, currency) + ' per m²' },
+      { label: 'Parcel area', detail: 'traced or entered land area', factorText: fmtNum(lv.landArea, 1) + ' m²' }
+    ];
+    var notes = [];
+    if (ri.basis === 'default') notes.push('No rate is set for this property\'s Area or Sector; the city-wide default rate was used.');
+    return { ok: true, lines: lines, value: lv.value, valueText: fmtMoney(lv.value, currency), notes: notes };
+  }
+
+  /* Method statement for the report (Property Valuation Act 2024 s.22) */
+  function methodStatement(project, fit) {
+    var basis = project.valueBasis === 'annual_rental' ? 'estimated annual rental value' : 'capital (market) value';
+    var lr = project.landRates || {};
+    var out = [];
+    out.push('Basis of valuation: ' + basis + ', in ' + (project.currency || 'MWK') + '.');
+    out.push('Land: direct market comparative method (s.22(4)(a)). Land value = rate per m² for the property\'s ' + (lr.level === 'sector' ? 'Sector' : 'Area') + ' × parcel area. The schedule of rates starts from the median land values per m² in the 2011 valuation roll' + (lr.upliftFactor && lr.upliftFactor !== 1 ? ', multiplied by an uplift factor of ' + fmtNum(lr.upliftFactor, 3) : '') + '; properties in Areas without a rate use a default of ' + fmtMoney(lr.defaultRate, project.currency) + ' per m². Rates edited by the valuer are marked in the schedule.');
+    out.push('Improvements: residual method (s.22(4)(f)). For each sample property the improvement value is the valuer\'s total value less the land value. A least-squares regression (' + (fit ? formDescription(fit.form).split(':')[0] : 'log-linear') + ' form) calibrates a formula of built area and observable characteristics on those residuals; the formula is then applied to every property.');
+    out.push('Total value = land value + improvement value, reported separately (Local Government Act s.68(1)).');
+    out.push('Assumptions: areas are roof-line measurements from imagery × floors, or figures entered by staff, as recorded per property; characteristics are externally observed; the 2011 land rates require adjustment to the valuation date; the model is calibrated on ' + (fit ? fit.n : 0) + ' sample properties.');
+    return out;
+  }
+
   return {
     fmtNum: fmtNum, fmtMoney: fmtMoney, fmtPct: fmtPct, fmtP: fmtP, fmtWeight: fmtWeight,
     significance: significance, formulaText: formulaText, formDescription: formDescription,
-    weightsTable: weightsTable, calculationSheet: calculationSheet, fitSummary: fitSummary
+    weightsTable: weightsTable, calculationSheet: calculationSheet, fitSummary: fitSummary,
+    landSheet: landSheet, methodStatement: methodStatement
   };
 }));

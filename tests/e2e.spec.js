@@ -1,7 +1,8 @@
 /*
  * End-to-end smoke test: opens index.html from file://, imports the synthetic
- * sample, fits both models, locks a weight, compares forms, traces a rooftop
- * on the map, exports the roll and checks persistence across a reload.
+ * sample, checks Areas were detected, fits the model, edits a land rate,
+ * switches to Advanced and locks a weight, exports the roll, traces a rooftop
+ * on the map and checks persistence across a reload.
  *
  * Run:  node tests/e2e.spec.js        (needs the playwright package and Chromium)
  */
@@ -20,99 +21,95 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
-  page.on('console', m => { if (m.type() === 'error' && !/tile|arcgis|openstreetmap|net::ERR/i.test(m.text())) errors.push(m.text()); });
+  page.on('console', m => { if (m.type() === 'error' && !/tile|arcgis|openstreetmap|fonts\.g|net::ERR/i.test(m.text())) errors.push(m.text()); });
 
   await page.goto(URL);
   await page.waitForSelector('#property-table');
+  assert.ok(await page.evaluate(() => document.body.classList.contains('mode-simple')), 'starts in Simplified mode');
+  assert.ok(await page.evaluate(() => Object.keys(window.App.state.project.landRates.areas).length >= 40), 'default land rates seeded');
 
   // ---- import ------------------------------------------------------------
   await page.setInputFiles('#file-import', SAMPLE);
   await page.waitForSelector('#import-dialog[open]');
   assert.equal(await page.inputValue('#import-mapping select[data-field="builtArea_m2"]'), 'Built_Area_m2');
   assert.equal(await page.inputValue('#import-mapping select[data-field="landArea_m2"]'), 'Land_Area_m2');
-  assert.equal(await page.inputValue('#import-mapping select[data-field="landValue"]'), 'Land_Value_MWK');
-  assert.equal(await page.inputValue('#import-mapping select[data-field="improvementValue"]'), 'Improvement_Value_MWK');
+  assert.equal(await page.inputValue('#import-mapping select[data-field="totalValue"]'), 'Total_Value_MWK');
   assert.equal(await page.inputValue('#import-mapping select[data-field="lat"]'), 'Latitude');
-  // import every remaining column as a characteristic, with sensible model assignment
-  const extraRows = await page.$$('#import-extras tbody tr');
-  for (const tr of extraRows) {
-    const header = await tr.getAttribute('data-header');
-    await (await tr.$('.extra-check')).check();
-    const sels = await tr.$$('select');
-    if (header === 'Road_Access') await sels[1].selectOption('both');
-    if (header === 'Piped_Water') await sels[1].selectOption('land');
-    if (header === 'Zone') await sels[1].selectOption('land');
-  }
+  assert.equal(await page.inputValue('#import-mapping select[data-field="floors"]'), 'Floors');
+  const extras = await page.$$eval('#import-extras tbody tr', rows => rows.map(r => r.getAttribute('data-header')));
+  assert.deepEqual(extras.sort(), ['Fence', 'Road_Access', 'Roof_Material', 'Structure_Type', 'Wall_Material']);
   await page.click('#import-confirm');
-  await page.waitForFunction(() => /250 properties, 250 with sample values/.test(document.querySelector('#property-count').textContent));
-  const featureCount = await page.$$eval('#feature-table tbody tr', r => r.length);
-  assert.equal(featureCount, 6, 'six characteristics imported');
+  await page.waitForFunction(() => /250 properties, 125 with a valuer total/.test(document.querySelector('#property-count').textContent));
+  const located = await page.evaluate(() => window.App.state.project.properties.filter(p => p.areaId !== null && p.locationSource === 'map').length);
+  assert.equal(located, 250, 'every imported property was assigned an Area from its coordinates');
+  const plotArea = await page.evaluate(() => window.App.state.project.properties.slice(0, 20).every(p => String(p.areaId) === p.plotNo.split('/')[0]));
+  assert.ok(plotArea, 'detected Area matches the plot number prefix');
 
-  // use the Zone field as a land characteristic
-  await page.click('.tabs button[data-tab="features"]');
-  await page.click('#btn-zone-feature');
-  await page.waitForFunction(() => document.querySelectorAll('#feature-table tbody tr').length === 7);
-  const zoneCats = await page.evaluate(() => window.App.state.project.features.find(f => f.source === 'zone').categories.length);
-  assert.equal(zoneCats, 6, 'six zones in the sample');
+  // ---- results (simplified) ----------------------------------------------
+  await page.click('.tabs button[data-tab="results"]');
+  await page.waitForFunction(() => /Model fitted on 125 sample properties/.test(document.querySelector('#results-summary').textContent));
+  const fit = await page.evaluate(() => { const f = window.App.state.project.model.fit; return { r2: f.r2, n: f.n, cod: f.cod }; });
+  assert.ok(fit.r2 > 0.5 && fit.r2 <= 1, 'model fits the synthetic data, r2=' + fit.r2);
+  await page.waitForFunction(() => /250 of 250 properties valued/.test(document.querySelector('#roll-summary').textContent));
+  const sums = await page.evaluate(() => window.App.rollExportRows().rows.map(r => [r.LandValue, r.ImprovementValue, r.TotalValue, r.LandRateBasis]));
+  sums.forEach(([l, i, t, b]) => { assert.ok(Math.abs(l + i - t) <= 1, 'land + improvement = total'); assert.equal(b, 'area', 'Area rate used'); });
+  const ratios = await page.evaluate(() => window.App.rollExportRows().rows.filter(r => r.Ratio_formula_to_valuer !== '').map(r => r.Ratio_formula_to_valuer));
+  const median = ratios.slice().sort((a, b) => a - b)[Math.floor(ratios.length / 2)];
+  assert.ok(median > 0.9 && median < 1.1, 'median formula/valuer ratio near 1: ' + median);
 
-  // ---- models ------------------------------------------------------------
-  await page.click('.tabs button[data-tab="models"]');
-  await page.click('#fit-land');
-  await page.click('#fit-improvement');
-  await page.waitForSelector('#stats-land');
-  await page.waitForSelector('#stats-improvement');
-  const statsText = await page.textContent('#stats-improvement');
-  assert.ok(/R²/.test(statsText) && /RMSE/.test(statsText) && /COD/.test(statsText), 'fit statistics shown');
-  const r2 = await page.evaluate(() => window.App.state.project.models.improvement.fit.r2);
-  assert.ok(r2 > 0.5 && r2 <= 1, 'improvement model fits the synthetic data, r2=' + r2);
-  const landR2 = await page.evaluate(() => window.App.state.project.models.land.fit.r2);
-  assert.ok(landR2 > 0.5 && landR2 <= 1, 'land model fits, r2=' + landR2);
-  const zoneTerms = await page.evaluate(() => window.App.state.project.models.land.fit.columns.filter(c => c.featureId === 'zone').length);
-  assert.equal(zoneTerms, 6, 'zone enters the land model as six category columns');
-  const loo = await page.evaluate(() => { const f = window.App.state.project.models.improvement.fit; return [f.loocvRmse, f.loocvSkipped]; });
-  assert.ok(loo[0] !== null && loo[0] > 0, 'leave-one-out RMSE computed despite leverage-1 rows (skipped ' + loo[1] + ')');
+  // calculation sheet shows land and building parts
+  await page.click('#roll-table tbody tr button');
+  await page.waitForSelector('#sheet-dialog[open]');
+  const sheetText = await page.textContent('#sheet-content');
+  assert.ok(/Land rate/.test(sheetText) && /Base value/.test(sheetText) && /Total value \(land \+ buildings\)/.test(sheetText));
+  await page.click('#sheet-close');
 
-  // lock the fence weight at +10 % and check the refit reports the cost
-  const fenceRow = page.locator('#weights-improvement tbody tr', { hasText: 'Fence' }).first();
+  // ---- land rates: editing a rate changes the roll ------------------------
+  await page.click('.tabs button[data-tab="rates"]');
+  const target = await page.evaluate(() => { const p = window.App.state.project.properties.find(x => x.areaId === 3 && x.totalValue === null); return p ? { id: p.id, land: window.App.valueOf(p).land } : null; });
+  assert.ok(target, 'a non-sample property in Area 3 exists');
+  const row3 = page.locator('#rates-table tbody tr', { hasText: 'Area 3' }).first();
+  await row3.locator('input[type="number"]').fill('8784');
+  await row3.locator('input[type="number"]').dispatchEvent('change');
+  await page.waitForFunction(id => { const p = window.App.state.project.properties.find(x => x.id === id); return window.App.valueOf(p).rateInfo.rate === 8784; }, target.id);
+  const after = await page.evaluate(id => { const p = window.App.state.project.properties.find(x => x.id === id); return window.App.valueOf(p).land; }, target.id);
+  assert.ok(Math.abs(after - 2 * target.land) < 1, 'doubling the Area 3 rate doubles land value');
+  assert.equal(await page.evaluate(() => window.App.state.project.landRates.areas['3'].source), 'edited by valuer');
+  await page.fill('#rate-uplift', '2');
+  await page.dispatchEvent('#rate-uplift', 'change');
+  await page.waitForFunction(id => { const p = window.App.state.project.properties.find(x => x.id === id); return window.App.valueOf(p).rateInfo.rate === 17568; }, target.id);
+  await page.fill('#rate-uplift', '1');
+  await page.dispatchEvent('#rate-uplift', 'change');
+
+  // ---- advanced mode: model tab, lock a weight, compare forms -----------
+  await page.click('#mode-toggle button[data-mode="advanced"]');
+  await page.waitForFunction(() => document.body.classList.contains('mode-advanced'));
+  await page.click('.tabs button[data-tab="model"]');
+  await page.waitForSelector('#weights-table');
+  const fenceRow = page.locator('#weights-table tbody tr', { hasText: 'Fence' }).first();
   await fenceRow.locator('input[type="checkbox"]').nth(1).check();
-  await page.waitForFunction(() => window.App.state.project.models.improvement.fit.status.indexOf('locked') >= 0);
+  await page.waitForFunction(() => window.App.state.project.model.fit.status.indexOf('locked') >= 0);
   await fenceRow.locator('input[type="number"]').fill('10');
   await fenceRow.locator('input[type="number"]').dispatchEvent('change');
-  await page.waitForFunction(() => {
-    const f = window.App.state.project.models.improvement.fit;
-    const j = f.columns.findIndex(c => c.label === 'Fence');
-    return f.status[j] === 'locked' && Math.abs(Math.exp(f.coef[j]) - 1.10) < 1e-9;
-  });
-  assert.ok(/R² without locks/.test(await page.textContent('#stats-improvement')), 'unconstrained R² shown when a lock is active');
+  await page.waitForFunction(() => { const f = window.App.state.project.model.fit; const j = f.columns.findIndex(c => c.label === 'Fence'); return f.status[j] === 'locked' && Math.abs(Math.exp(f.coef[j]) - 1.10) < 1e-9; });
+  assert.ok(/R² without locks/.test(await page.textContent('#model-stats')), 'unconstrained R² shown when a lock is active');
+  await page.selectOption('#form-select', 'loglog');
+  await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglog');
+  await page.click('#compare-forms');
+  assert.equal(await page.$$eval('#compare-box tbody tr', r => r.length), 3, 'three forms compared');
+  await page.selectOption('#form-select', 'loglinear');
+  await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglinear');
 
-  // switch to log-log and back, compare forms
-  await page.selectOption('#form-improvement', 'loglog');
-  await page.waitForFunction(() => window.App.state.project.models.improvement.fit.form === 'loglog');
-  assert.ok(/exponent/i.test(await page.textContent('#formula-improvement')), 'log-log formula text');
-  await page.click('#compare-improvement');
-  const compareRows = await page.$$eval('#compare-box-improvement tbody tr', r => r.length);
-  assert.equal(compareRows, 3, 'three forms compared');
-
-  // ---- roll and export ---------------------------------------------------
-  await page.click('.tabs button[data-tab="roll"]');
-  await page.waitForFunction(() => /250 of 250 properties valued/.test(document.querySelector('#roll-summary').textContent));
+  // ---- export ------------------------------------------------------------
+  await page.click('.tabs button[data-tab="results"]');
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-roll-csv')]);
   const csvPath = path.join(__dirname, 'out_valuation_roll.csv');
   await download.saveAs(csvPath);
   const csv = fs.readFileSync(csvPath, 'utf8');
   const header = csv.split(/\r?\n/)[0];
-  for (const h of ['LandValue_formula', 'ImprovementValue_formula', 'TotalValue_formula', 'LandAreaSource', 'BuiltAreaSource']) assert.ok(header.includes(h), 'export has ' + h);
+  for (const h of ['LandValue', 'ImprovementValue', 'TotalValue', 'LandRate_per_m2', 'LandRateBasis', 'LandRateSource', 'LCC_Area', 'LandAreaSource', 'BuiltAreaSource']) assert.ok(header.includes(h), 'export has ' + h);
   assert.equal(csv.trim().split(/\r?\n/).length, 251, '250 data rows exported');
   fs.unlinkSync(csvPath);
-  // land + improvement = total for every property
-  const sums = await page.evaluate(() => window.App.rollExportRows().rows.map(r => [r.LandValue_formula, r.ImprovementValue_formula, r.TotalValue_formula]));
-  sums.forEach(([l, i, t]) => assert.ok(Math.abs(l + i - t) <= 1, 'land + improvement = total'));
-
-  // calculation sheet opens
-  await page.click('#roll-table tbody tr button');
-  await page.waitForSelector('#sheet-dialog[open]');
-  assert.ok(/Total value \(land \+ improvements\)/.test(await page.textContent('#sheet-content')));
-  await page.click('#sheet-close');
 
   // ---- map: trace a rooftop with the mouse --------------------------------
   await page.click('.tabs button[data-tab="properties"]');
@@ -124,23 +121,25 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   await page.click('#tool-roof');
   const pts = [[cx - 50, cy - 50], [cx + 50, cy - 50], [cx + 50, cy + 50], [cx - 50, cy + 50]];
   for (const [x, y] of pts) { await page.mouse.click(x, y); await page.waitForTimeout(120); }
-  await page.mouse.click(pts[0][0], pts[0][1]); // close the polygon
-  await page.waitForFunction(() => { const p = window.App.state.project.properties[0]; return p.roofPolygons.length === 1; });
+  await page.mouse.click(pts[0][0], pts[0][1]);
+  await page.waitForFunction(() => window.App.state.project.properties[0].roofPolygons.length === 1);
   const area = await page.evaluate(() => window.App.state.project.properties[0].roofPolygons[0].area_m2);
-  // at zoom 19 near latitude -13.96 one pixel is about 0.29 m, so 100 px ≈ 29 m
   const mPerPx = 156543.03392 * Math.cos(-13.9626 * Math.PI / 180) / Math.pow(2, 19);
   const expected = Math.pow(100 * mPerPx, 2);
   assert.ok(Math.abs(area - expected) / expected < 0.1, 'traced area ' + area.toFixed(1) + ' m² close to expected ' + expected.toFixed(1));
-  const built = await page.evaluate(() => window.App.state.project.properties[0].builtArea_m2);
-  // imported area is kept (source "imported"); traced total is offered instead
-  assert.ok(built !== null, 'built area still set');
+
+  // drop a pin and check the Area is detected
+  await page.click('#tool-pin');
+  await page.mouse.click(cx, cy);
+  await page.waitForFunction(() => window.App.state.project.properties[0].locationSource === 'map' && window.App.state.project.properties[0].areaId === 15);
 
   // ---- persistence across reload ----------------------------------------
   await page.waitForTimeout(700);
   await page.reload();
   await page.waitForFunction(() => window.App.state.project && window.App.state.project.properties.length === 250);
-  const persistedFit = await page.evaluate(() => window.App.state.project.models.land.fit && window.App.state.project.models.land.fit.ok);
-  assert.ok(persistedFit, 'fitted model survives reload');
+  assert.ok(await page.evaluate(() => window.App.state.project.model.fit && window.App.state.project.model.fit.ok), 'fitted model survives reload');
+  assert.equal(await page.evaluate(() => window.App.state.project.mode), 'advanced', 'mode persists');
+  assert.equal(await page.evaluate(() => window.App.state.project.landRates.areas['3'].rate), 8784, 'edited rate persists');
 
   assert.deepEqual(errors, [], 'no page errors');
   await browser.close();

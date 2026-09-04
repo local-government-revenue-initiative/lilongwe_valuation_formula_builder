@@ -1,5 +1,11 @@
 node_modules
 tests
 r
+styling
 package.json
 .gitignore
+*.pdf
+*.docx
+*.gpkg
+QVR 2011 COMBINED-ADAMS5_extract.csv
+Lilongwe_Valuation_Tool_Context.md

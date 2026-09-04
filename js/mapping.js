@@ -23,11 +23,31 @@
     });
     var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' });
     esri.addTo(map);
-    L.control.layers({ 'Satellite (Esri)': esri, 'Streets (OpenStreetMap)': osm }, null, { position: 'topright' }).addTo(map);
     L.control.scale({ imperial: false }).addTo(map);
 
     editableGroup = new L.FeatureGroup().addTo(map);
     othersGroup = new L.FeatureGroup().addTo(map);
+
+    // Area and Sector boundary overlays (from data/lilongwe_*.js)
+    var overlays = {};
+    if (root.LILONGWE_AREAS) {
+      layers.areas = L.geoJSON(root.LILONGWE_AREAS, {
+        style: { color: '#14472e', weight: 1.5, fillColor: '#14472e', fillOpacity: 0.04, interactive: false },
+        onEachFeature: function (f, layer) { layer.bindTooltip(f.properties.Label_Area || ('Area ' + f.properties.Area_ID), { permanent: true, direction: 'center', className: 'area-label' }); }
+      }).addTo(map);
+      overlays['Area boundaries'] = layers.areas;
+    }
+    if (root.LILONGWE_SECTORS) {
+      layers.sectors = L.geoJSON(root.LILONGWE_SECTORS, {
+        style: { color: '#00685b', weight: 1, dashArray: '4 3', fillOpacity: 0, interactive: false },
+        onEachFeature: function (f, layer) { layer.bindTooltip('Sector ' + f.properties.Area_Secto + (f.properties.Land_Use ? ' · ' + f.properties.Land_Use : ''), { sticky: true }); }
+      });
+      overlays['Sector boundaries'] = layers.sectors;
+    }
+    L.control.layers({ 'Satellite (Esri)': esri, 'Streets (OpenStreetMap)': osm }, overlays, { position: 'topright', collapsed: true }).addTo(map);
+    // Area labels only when zoomed in enough to read them
+    function updateLabels() { L.DomUtil[map.getZoom() >= 14 ? 'removeClass' : 'addClass'](map.getContainer(), 'labels-off'); }
+    map.on('zoomend', updateLabels); updateLabels();
 
     drawControl = new L.Control.Draw({
       position: 'topleft',
@@ -132,7 +152,7 @@
     }
   }
 
-  function hasSample(p) { return (p.landValue !== null && p.landValue !== undefined) || (p.improvementValue !== null && p.improvementValue !== undefined); }
+  function hasSample(p) { return p.totalValue !== null && p.totalValue !== undefined && p.totalValue !== ''; }
 
   function focus(p) {
     if (!map || !p) return;
@@ -157,5 +177,7 @@
     });
   }
 
-  root.Mapping = { init: init, render: render, focus: focus, fitAll: fitAll, startTool: startTool, cancelTool: cancelTool, invalidate: invalidate, geometryArea: geometryArea, locateDevice: locateDevice, currentTool: function () { return currentTool; }, map: function () { return map; } };
+  function showSectors(on) { if (!map || !layers.sectors) return; if (on) layers.sectors.addTo(map); else map.removeLayer(layers.sectors); }
+
+  root.Mapping = { init: init, render: render, focus: focus, fitAll: fitAll, startTool: startTool, cancelTool: cancelTool, invalidate: invalidate, geometryArea: geometryArea, locateDevice: locateDevice, currentTool: function () { return currentTool; }, map: function () { return map; }, showSectors: showSectors };
 }(typeof self !== 'undefined' ? self : this));

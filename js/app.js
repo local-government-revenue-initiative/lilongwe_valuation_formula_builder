@@ -1,17 +1,19 @@
 /*
- * app.js - user interface and application state for the Lilongwe Valuation
- * Formula Builder. Everything is plain DOM; no framework and no build step.
+ * app.js - user interface and application state for the Lilongwe Property
+ * Valuation Tool. Plain DOM, no framework, no build step.
+ *
+ * Valuation method (see js/valuation.js): land = rate × parcel area from the
+ * land-rate schedule; improvements from a regression fitted on the residual
+ * (valuer's total value − land value) of the sample properties.
  */
 (function () {
   'use strict';
 
-  var PROJECT_VERSION = 1;
-  var MODEL_KINDS = ['land', 'improvement'];
-  var MODEL_LABEL = { land: 'Land model', improvement: 'Improvement (building) model' };
-  var AREA_LABEL = { land: 'Land area (m²)', improvement: 'Built area (m²)' };
+  var PROJECT_VERSION = 2;
   var MAX_ROWS = 500;
+  var AREA_LABEL = 'Built area (m²)';
 
-  var state = { project: null, selectedId: null, filter: '', saveTimer: null, pendingImport: null, photoUrls: {} };
+  var state = { project: null, selectedId: null, filter: '', saveTimer: null, pendingImport: null, photoUrls: {}, currentTab: 'properties' };
 
   /* ------------------------------------------------------------------ */
   /* Project model                                                       */
@@ -21,8 +23,9 @@
 
   function newProject() {
     return {
-      version: PROJECT_VERSION, name: 'Council estates pilot', currency: 'MWK', valueBasis: 'annual_rental',
-      features: [], properties: [], models: { land: newModelSpec(), improvement: newModelSpec() },
+      version: PROJECT_VERSION, name: 'Council estates pilot', currency: 'MWK', valueBasis: 'capital', mode: 'simple',
+      valuer: { name: '', registration: '', valuationDate: '', validityMonths: 12 },
+      features: [], properties: [], landRates: Valuation.defaultSchedule(window.LAND_RATES_DEFAULT || null), model: newModelSpec(),
       createdAt: new Date().toISOString()
     };
   }
@@ -30,21 +33,21 @@
   function newProperty() {
     return {
       id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-      plotNo: '', description: '', zone: '', lat: null, lng: null,
+      plotNo: '', description: '', zone: '', lat: null, lng: null, areaId: null, sectorKey: null, locationSource: null,
       roofPolygons: [], builtArea_m2: null, builtAreaSource: null, floors: null,
       parcelPolygon: null, landArea_m2: null, landAreaSource: null,
-      landValue: null, improvementValue: null, totalValueEntered: null,
+      totalValue: null, landRateOverride: null, landRateOverrideNote: '',
       characteristics: {}, photoIds: [], notes: ''
     };
   }
 
   function upgradeProject(p) {
-    if (!p.models) p.models = {};
-    MODEL_KINDS.forEach(function (k) { p.models[k] = Object.assign(newModelSpec(), p.models[k] || {}); });
+    p = Valuation.migrateProject(p, window.LAND_RATES_DEFAULT || null);
+    p.model = Object.assign(newModelSpec(), p.model || {});
     p.features = p.features || [];
     p.properties = (p.properties || []).map(function (x) { return Object.assign(newProperty(), x); });
     p.currency = p.currency || 'MWK';
-    p.valueBasis = p.valueBasis || 'annual_rental';
+    p.valueBasis = p.valueBasis || 'capital';
     return p;
   }
 
@@ -52,17 +55,14 @@
   function selected() { return state.selectedId ? findProperty(state.selectedId) : null; }
 
   var SUGGESTED_FEATURES = [
-    { id: 'location_rating', name: 'Location rating', type: 'categorical', appliesTo: 'land', categories: ['Good', 'Average', 'Bad'], baseCategory: 'Average' },
-    { id: 'street_paved', name: 'Street paved', type: 'boolean', appliesTo: 'both' },
-    { id: 'street_condition', name: 'Street condition', type: 'categorical', appliesTo: 'both', categories: ['Good', 'Average', 'Bad'], baseCategory: 'Average', isCondition: true },
-    { id: 'water_supply', name: 'Piped water supply', type: 'boolean', appliesTo: 'land' },
-    { id: 'structure_type', name: 'Structure type', type: 'categorical', appliesTo: 'improvement', categories: ['Dwelling', 'Shop / office', 'Market / warehouse / industrial', 'Institutional', 'Other'], baseCategory: 'Dwelling' },
-    { id: 'wall_material', name: 'Wall material', type: 'categorical', appliesTo: 'improvement', categories: ['Masonry / burnt brick / block', 'Mud / unburnt brick', 'Wood', 'Metal sheet / other'], baseCategory: 'Masonry / burnt brick / block' },
-    { id: 'roof_material', name: 'Roof material', type: 'categorical', appliesTo: 'improvement', categories: ['Concrete / tile', 'Iron sheet', 'Asbestos', 'Thatch / other'], baseCategory: 'Iron sheet' },
-    { id: 'windows', name: 'Windows (dominant type)', type: 'categorical', appliesTo: 'improvement', categories: ['Aluminium sliding / high value', 'Glazed casement / louvre', 'None / breeze block / wood'], baseCategory: 'Glazed casement / louvre' },
-    { id: 'wall_condition', name: 'Wall condition', type: 'categorical', appliesTo: 'improvement', categories: ['Good', 'Average', 'Bad'], baseCategory: 'Average', isCondition: true },
-    { id: 'fence', name: 'Permanent fence', type: 'boolean', appliesTo: 'improvement' },
-    { id: 'security', name: 'Security features (guard post, wall, wire)', type: 'boolean', appliesTo: 'improvement' }
+    { id: 'structure_type', name: 'Structure type', type: 'categorical', categories: ['Dwelling', 'Shop / office', 'Market / warehouse / industrial', 'Institutional', 'Other'], baseCategory: 'Dwelling' },
+    { id: 'wall_material', name: 'Wall material', type: 'categorical', categories: ['Masonry / burnt brick / block', 'Mud / unburnt brick', 'Wood', 'Metal sheet / other'], baseCategory: 'Masonry / burnt brick / block' },
+    { id: 'roof_material', name: 'Roof material', type: 'categorical', categories: ['Concrete / tile', 'Iron sheet', 'Asbestos', 'Thatch / other'], baseCategory: 'Iron sheet' },
+    { id: 'windows', name: 'Windows (dominant type)', type: 'categorical', categories: ['Aluminium sliding / high value', 'Glazed casement / louvre', 'None / breeze block / wood'], baseCategory: 'Glazed casement / louvre' },
+    { id: 'street_paved', name: 'Street paved', type: 'boolean' },
+    { id: 'wall_condition', name: 'Wall condition', type: 'categorical', categories: ['Good', 'Average', 'Bad'], baseCategory: 'Average', isCondition: true },
+    { id: 'fence', name: 'Permanent fence', type: 'boolean' },
+    { id: 'security', name: 'Security features (guard post, wall, wire)', type: 'boolean' }
   ];
 
   /* ------------------------------------------------------------------ */
@@ -86,6 +86,7 @@
   function numOrNull(v) { return Engine.toNumber(v); }
   function fmt(x, d) { return Formula.fmtNum(x, d); }
   function money(x) { return Formula.fmtMoney(x, state.project.currency); }
+  function isAdvanced() { return state.project.mode === 'advanced'; }
 
   var toastTimer = null;
   function toast(msg, isError) {
@@ -95,114 +96,119 @@
     toastTimer = setTimeout(function () { t.hidden = true; }, isError ? 7000 : 3500);
   }
 
-  function markDirty(refit) {
+  function save() {
     clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(function () { Storage.saveProject(state.project); }, 400);
-    if (refit) MODEL_KINDS.forEach(function (k) { if (state.project.models[k].fit) fitModel(k, true); });
+    state.saveTimer = setTimeout(function () { Storage.saveProject(state.project); $('#footer-status').textContent = 'Saved in this browser at ' + new Date().toLocaleTimeString('en-GB'); }, 400);
+  }
+
+  /* Anything that changes land values or samples changes the fitted model */
+  function markDirty(refit) {
+    save();
+    if (refit) fitModel(true);
   }
 
   /* ------------------------------------------------------------------ */
-  /* Model data preparation and fitting                                  */
+  /* Characteristics, location and model                                 */
   /* ------------------------------------------------------------------ */
 
-  function modelFeatures(kind) {
-    var spec = state.project.models[kind];
-    return state.project.features.filter(function (f) { return f.appliesTo === kind || f.appliesTo === 'both'; })
-      .map(function (f) { return Object.assign({}, f, { baseCategory: spec.bases[f.id] || f.baseCategory || null }); });
-  }
-
-  /* Characteristics for a property, including features that mirror the zone field */
-  function effectiveChars(p) {
+  function charsFor(p) {
     var chars = p.characteristics || {};
-    var zoneFeatures = state.project.features.filter(function (f) { return f.source === 'zone'; });
-    if (!zoneFeatures.length) return chars;
+    var derived = state.project.features.filter(function (f) { return f.source === 'zone' || f.source === 'landuse'; });
+    if (!derived.length) return chars;
     chars = Object.assign({}, chars);
-    zoneFeatures.forEach(function (f) { if (p.zone) chars[f.id] = String(p.zone).trim(); else delete chars[f.id]; });
+    derived.forEach(function (f) {
+      var v = null;
+      if (f.source === 'zone') v = p.zone ? String(p.zone).trim() : null;
+      else if (f.source === 'landuse') { var s = p.sectorKey ? Geo.sectorInfo(p.sectorKey) : null; v = s && s.Land_Use ? s.Land_Use : null; if (!v && p.areaId !== null) { var a = Geo.areaInfo(p.areaId); v = a && a.Land_Use ? a.Land_Use : null; } }
+      if (v) chars[f.id] = v; else delete chars[f.id];
+    });
     return chars;
   }
 
-  function modelRow(kind, p) {
-    return {
-      id: p.id,
-      area: kind === 'land' ? p.landArea_m2 : p.builtArea_m2,
-      value: kind === 'land' ? p.landValue : p.improvementValue,
-      chars: effectiveChars(p)
-    };
-  }
-
-  function zoneCategories() {
+  function landUseCategories() {
     var cats = {};
-    state.project.properties.forEach(function (p) { if (p.zone && String(p.zone).trim()) cats[String(p.zone).trim()] = true; });
+    Geo.sectorKeys().forEach(function (k) { var s = Geo.sectorInfo(k); if (s && s.Land_Use) cats[s.Land_Use] = true; });
+    Geo.areaIds().forEach(function (k) { var a = Geo.areaInfo(k); if (a && a.Land_Use) cats[a.Land_Use] = true; });
     return Object.keys(cats).sort();
   }
 
-  function sampleRows(kind) {
-    return state.project.properties.map(function (p) { return modelRow(kind, p); }).filter(function (r) { return numOrNull(r.value) !== null; });
+  /* Assign Area/Sector from the map position, else from the plot number. */
+  function locateProperty(p, force) {
+    if (!force && p.locationSource === 'manual') return false;
+    var before = p.areaId + '|' + p.sectorKey;
+    if (numOrNull(p.lat) !== null && numOrNull(p.lng) !== null) {
+      var loc = Geo.locate(p.lat, p.lng);
+      if (loc.areaId !== null) { p.areaId = loc.areaId; p.sectorKey = loc.sectorKey; p.locationSource = 'map'; return before !== p.areaId + '|' + p.sectorKey; }
+    }
+    var pk = Geo.fromPlotNo(p.plotNo);
+    if (pk.areaId !== null && Geo.areaInfo(pk.areaId)) {
+      p.areaId = pk.areaId;
+      p.sectorKey = Geo.sectorInfo(pk.sectorKey) ? pk.sectorKey : (Geo.sectorInfo(String(pk.areaId)) ? String(pk.areaId) : null);
+      p.locationSource = 'plot';
+      return before !== p.areaId + '|' + p.sectorKey;
+    }
+    return false;
   }
 
-  function buildSpec(kind, formOverride) {
-    var spec = state.project.models[kind];
+  function locateAll(force) {
+    var n = 0;
+    state.project.properties.forEach(function (p) { if (locateProperty(p, force)) n++; });
+    return n;
+  }
+
+  function buildSpec(formOverride) {
+    var spec = state.project.model;
     var form = formOverride || spec.form;
-    var rows = sampleRows(kind);
-    var columns = Engine.buildColumns(form, modelFeatures(kind), rows, AREA_LABEL[kind]);
+    var prep = Valuation.modelRows(state.project, charsFor);
+    var rows = prep.rows.filter(function (r) { return r.value !== null; });
+    var feats = Valuation.modelFeatures(state.project).map(function (f) { return Object.assign({}, f, { baseCategory: spec.bases[f.id] || f.baseCategory || null }); });
+    var columns = Engine.buildColumns(form, feats, rows, AREA_LABEL);
     var locks = {};
     Object.keys(spec.locks).forEach(function (key) {
       var col = columns.find(function (c) { return c.key === key; });
       if (!col) return;
-      if (formOverride && formOverride !== spec.form && (col.kind === 'area' || col.kind === 'intercept' || col.kind === 'numeric')) return; // units differ between forms
+      if (formOverride && formOverride !== spec.form && (col.kind === 'area' || col.kind === 'intercept' || col.kind === 'numeric')) return;
       var coef = Engine.displayToCoef(form, col, spec.locks[key]);
       if (coef !== null) locks[key] = coef;
     });
-    return { form: form, columns: columns, included: spec.included, locks: locks, smearing: spec.smearing && form !== 'linear', rows: rows };
+    return { form: form, columns: columns, included: spec.included, locks: locks, smearing: spec.smearing && form !== 'linear', rows: rows, prep: prep };
   }
 
-  function fitModel(kind, silent) {
-    var spec = state.project.models[kind];
-    var s = buildSpec(kind);
+  function fitModel(silent) {
+    var spec = state.project.model;
+    var s = buildSpec();
     var fit = Engine.fit(s, s.rows);
+    fit.residualIssues = s.prep.issues;
+    fit.warnings = (s.prep.warnings || []).concat(fit.warnings || []);
     spec.fit = fit;
     spec.fittedAt = new Date().toISOString();
-    if (!silent) toast(MODEL_LABEL[kind] + (fit.ok ? ' fitted on ' + fit.n + ' sample properties.' : ': nothing to fit yet.'), !fit.ok);
-    clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(function () { Storage.saveProject(state.project); }, 400);
-    renderModel(kind);
-    renderRoll();
+    if (!silent) toast(fit.ok ? 'Model fitted on ' + fit.n + ' sample properties.' : 'Nothing to fit yet: enter total values for sample properties.', !fit.ok);
+    save();
+    renderModel();
+    renderResults();
     return fit;
   }
 
-  function modelForPrediction(kind) {
-    var spec = state.project.models[kind];
-    if (!spec.fit || !spec.fit.ok) return null;
-    return { form: spec.fit.form, columns: spec.fit.columns, coef: spec.fit.coef, smearing: spec.fit.smearing };
+  function modelForPrediction() {
+    var f = state.project.model.fit;
+    if (!f || !f.ok) return null;
+    return { form: f.form, columns: f.columns, coef: f.coef, smearing: f.smearing };
   }
 
-  function valueProperty(p) {
-    var out = { land: null, improvement: null, total: null, flags: [] };
-    var lm = modelForPrediction('land'), im = modelForPrediction('improvement');
-    if (lm) {
-      if (numOrNull(p.landArea_m2) === null) out.flags.push('no land area');
-      else { var pl = Engine.predict(lm, modelRow('land', p)); if (pl.invalid) out.flags.push('land: ' + pl.invalid); else { out.land = pl.value; if (pl.missing.length) out.flags.push('land: missing ' + pl.missing.join(', ')); } }
-    } else out.flags.push('land model not fitted');
-    if (im) {
-      if (numOrNull(p.builtArea_m2) === null) out.flags.push('no built area');
-      else { var pi = Engine.predict(im, modelRow('improvement', p)); if (pi.invalid) out.flags.push('improvement: ' + pi.invalid); else { out.improvement = pi.value; if (pi.missing.length) out.flags.push('improvement: missing ' + pi.missing.join(', ')); } }
-    } else out.flags.push('improvement model not fitted');
-    if (out.land !== null || out.improvement !== null) out.total = (out.land || 0) + (out.improvement || 0);
-    if ((out.land === null) !== (out.improvement === null)) out.flags.push('total is partial');
-    return out;
-  }
+  function valueOf(p) { return Valuation.valueProperty(state.project, p, modelForPrediction(), charsFor); }
 
   /* ------------------------------------------------------------------ */
-  /* Rendering: properties                                               */
+  /* Properties tab                                                      */
   /* ------------------------------------------------------------------ */
 
-  function isSample(p) { return numOrNull(p.landValue) !== null || numOrNull(p.improvementValue) !== null; }
+  function isSample(p) { return numOrNull(p.totalValue) !== null; }
+  function areaText(p) { return p.areaId !== null && p.areaId !== undefined ? 'Area ' + p.areaId + (p.sectorKey && p.sectorKey !== String(p.areaId) ? ' · ' + p.sectorKey : '') : ''; }
 
   function filteredProperties() {
     var q = state.filter.trim().toLowerCase();
     if (!q) return state.project.properties;
     return state.project.properties.filter(function (p) {
-      return [p.plotNo, p.description, p.zone, p.notes].some(function (v) { return String(v || '').toLowerCase().indexOf(q) >= 0; });
+      return [p.plotNo, p.description, p.zone, p.notes, areaText(p)].some(function (v) { return String(v || '').toLowerCase().indexOf(q) >= 0; });
     });
   }
 
@@ -211,20 +217,18 @@
     tbody.innerHTML = '';
     var list = filteredProperties();
     list.slice(0, MAX_ROWS).forEach(function (p) {
-      var tr = el('tr', { class: 'selectable' + (p.id === state.selectedId ? ' selected' : ''), 'data-id': p.id, onclick: function () { selectProperty(p.id); } }, [
+      tbody.appendChild(el('tr', { class: 'selectable' + (p.id === state.selectedId ? ' selected' : ''), 'data-id': p.id, onclick: function () { selectProperty(p.id); } }, [
         el('td', { text: p.plotNo || '' }),
         el('td', { text: p.description || '' }),
-        el('td', { text: p.zone || '' }),
+        el('td', { text: areaText(p) }),
         el('td', { class: 'num', text: fmt(p.builtArea_m2, 0) }),
         el('td', { class: 'num', text: fmt(p.landArea_m2, 0) }),
-        el('td', { class: 'num', text: fmt(p.landValue, 0) }),
-        el('td', { class: 'num', text: fmt(p.improvementValue, 0) }),
+        el('td', { class: 'num', text: fmt(p.totalValue, 0) }),
         el('td', { text: (p.lat !== null && p.lng !== null) ? '●' : '' })
-      ]);
-      tbody.appendChild(tr);
+      ]));
     });
     var n = state.project.properties.length, s = state.project.properties.filter(isSample).length;
-    $('#property-count').textContent = n + ' properties, ' + s + ' with sample values' + (list.length > MAX_ROWS ? ' (showing first ' + MAX_ROWS + ' of ' + list.length + '; use search)' : '');
+    $('#property-count').textContent = n + ' properties, ' + s + ' with a valuer total' + (list.length > MAX_ROWS ? ' (showing first ' + MAX_ROWS + ' of ' + list.length + ')' : '');
   }
 
   function selectProperty(id) {
@@ -250,7 +254,7 @@
     if (p.landAreaSource === 'traced' || (p.landAreaSource === null && land !== null)) { p.landArea_m2 = land; p.landAreaSource = land === null ? null : 'traced'; }
   }
 
-  function field(labelText, input) { return el('label', null, [labelText, input]); }
+  function field(labelText, input, cls) { return el('label', { class: cls || null }, [labelText, input]); }
 
   function textInput(p, key, opts) {
     opts = opts || {};
@@ -264,19 +268,32 @@
     var box = $('#property-detail');
     var p = selected();
     box.innerHTML = '';
-    if (!p) { box.appendChild(el('p', { class: 'muted', text: 'Select a property from the list, add one, or import a file.' })); return; }
+    if (!p) { box.appendChild(el('p', { class: 'help', text: 'Select a property in the list, add one, or import a file.' })); return; }
     var proj = state.project;
 
-    // identity
+    // identity and location
+    var areaSel = el('select', { onchange: function (e) {
+      p.areaId = e.target.value === '' ? null : parseInt(e.target.value, 10); p.sectorKey = null; p.locationSource = 'manual'; markDirty(true); renderDetail(); renderProperties();
+    } }, [el('option', { value: '', text: '– not set –' })].concat(Geo.areaIds().slice().sort(function (a, b) { return a - b; }).map(function (id) { return el('option', { value: id, text: 'Area ' + id }); })));
+    areaSel.value = p.areaId === null || p.areaId === undefined ? '' : String(p.areaId);
+    var sectorOpts = Geo.sectorKeys().filter(function (k) { return p.areaId !== null && k.split('/')[0] === String(p.areaId); });
+    var sectorSel = el('select', { disabled: !sectorOpts.length, onchange: function (e) { p.sectorKey = e.target.value || null; p.locationSource = 'manual'; markDirty(true); renderDetail(); } },
+      [el('option', { value: '', text: sectorOpts.length ? '– not set –' : '(no sectors)' })].concat(sectorOpts.map(function (k) { var s = Geo.sectorInfo(k); return el('option', { value: k, text: k + (s && s.Land_Use ? ' · ' + s.Land_Use : '') }); })));
+    sectorSel.value = p.sectorKey || '';
     box.appendChild(el('div', { class: 'grid' }, [
-      field('Plot / property no.', textInput(p, 'plotNo')),
+      field('Plot / property no.', textInput(p, 'plotNo', { after: function () { locateProperty(p, false); } })),
       field('Description', textInput(p, 'description')),
-      field('Zone', textInput(p, 'zone')),
-      field('Latitude', textInput(p, 'lat', { type: 'number', step: 'any', numeric: true, after: function () { Mapping.render(proj.properties, p); } })),
-      field('Longitude', textInput(p, 'lng', { type: 'number', step: 'any', numeric: true, after: function () { Mapping.render(proj.properties, p); } }))
+      field('Latitude', textInput(p, 'lat', { type: 'number', step: 'any', numeric: true, refit: true, after: function () { locateProperty(p, false); Mapping.render(proj.properties, p); } })),
+      field('Longitude', textInput(p, 'lng', { type: 'number', step: 'any', numeric: true, refit: true, after: function () { locateProperty(p, false); Mapping.render(proj.properties, p); } })),
+      field('LCC Area', areaSel),
+      field('Sector', sectorSel)
+    ]));
+    box.appendChild(el('p', { class: 'help' }, [
+      p.locationSource ? el('span', { class: 'source-tag', text: 'area from ' + p.locationSource }) : el('span', { class: 'source-tag', text: 'area not set' }),
+      ' ', p.sectorKey && Geo.sectorInfo(p.sectorKey) ? (function () { var s = Geo.sectorInfo(p.sectorKey); return 'Sector land use: ' + (s.Land_Use || '–') + (s.Ownership ? '; land owner (map): ' + s.Ownership : ''); }()) : 'Drop a pin on the map to detect the Area and Sector automatically.'
     ]));
 
-    // areas
+    // building(s)
     var traced = tracedBuiltArea(p);
     var roofList = el('div');
     (p.roofPolygons || []).forEach(function (r, i) {
@@ -284,59 +301,53 @@
         el('span', { text: 'Rooftop ' + (i + 1) + ': ' + fmt(r.area_m2, 1) + ' m² × ' }),
         el('input', { type: 'number', class: 'short', min: 1, step: 1, value: r.floors || 1, onchange: function (e) { r.floors = Math.max(1, numOrNull(e.target.value) || 1); syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(proj.properties, p); } }),
         el('span', { text: ' floor(s) = ' + fmt(r.area_m2 * (r.floors || 1), 1) + ' m²' }),
-        el('button', { class: 'tiny secondary danger', text: 'remove', onclick: function () { p.roofPolygons.splice(i, 1); syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(proj.properties, p); } })
+        el('button', { type: 'button', class: 'btn tiny danger', text: 'remove', onclick: function () { p.roofPolygons.splice(i, 1); syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(proj.properties, p); } })
       ]));
     });
-    if (!(p.roofPolygons || []).length) roofList.appendChild(el('p', { class: 'muted small', text: 'No rooftop traced yet. Use "Trace rooftop" on the map (one shape per building), then set floors.' }));
-
+    if (!(p.roofPolygons || []).length) roofList.appendChild(el('p', { class: 'help', text: 'No rooftop traced. Use "Trace rooftop" on the map (one shape per building), then set the floors.' }));
     var builtInput = el('input', { type: 'number', step: 'any', min: 0, value: p.builtArea_m2 === null ? '' : p.builtArea_m2, onchange: function (e) {
       p.builtArea_m2 = numOrNull(e.target.value); p.builtAreaSource = p.builtArea_m2 === null ? null : 'manual'; markDirty(true); renderDetail(); renderProperties();
     } });
-    var builtRow = el('div', { class: 'inline' }, [
-      field('Built area (m²)', builtInput),
-      el('span', { class: 'source-tag', text: p.builtAreaSource ? 'source: ' + p.builtAreaSource : 'not set' }),
-      traced !== null && p.builtAreaSource !== 'traced' ? el('button', { class: 'tiny secondary', text: 'use traced (' + fmt(traced, 1) + ' m²)', onclick: function () { p.builtAreaSource = 'traced'; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); } }) : null
-    ]);
-    box.appendChild(el('fieldset', null, [el('legend', { text: 'Building(s) and built area' }), roofList, builtRow]));
+    box.appendChild(el('fieldset', null, [el('legend', { text: 'Building(s) and built area' }), roofList,
+      el('div', { class: 'inline' }, [field('Built area (m²)', builtInput), el('span', { class: 'source-tag', text: p.builtAreaSource ? 'source: ' + p.builtAreaSource : 'not set' }),
+        traced !== null && p.builtAreaSource !== 'traced' ? el('button', { type: 'button', class: 'btn tiny', text: 'use traced (' + fmt(traced, 1) + ' m²)', onclick: function () { p.builtAreaSource = 'traced'; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); } }) : null])]));
 
+    // land
     var parcelInfo = p.parcelPolygon ? el('div', { class: 'inline' }, [
       el('span', { text: 'Parcel traced: ' + fmt(p.parcelPolygon.area_m2, 1) + ' m²' }),
-      el('button', { class: 'tiny secondary danger', text: 'remove', onclick: function () { p.parcelPolygon = null; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(proj.properties, p); } })
-    ]) : el('p', { class: 'muted small', text: 'No parcel traced yet. Use "Trace parcel" on the map.' });
+      el('button', { type: 'button', class: 'btn tiny danger', text: 'remove', onclick: function () { p.parcelPolygon = null; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(proj.properties, p); } })
+    ]) : el('p', { class: 'help', text: 'No parcel traced. Use "Trace parcel" on the map, or type the area.' });
     var landInput = el('input', { type: 'number', step: 'any', min: 0, value: p.landArea_m2 === null ? '' : p.landArea_m2, onchange: function (e) {
       p.landArea_m2 = numOrNull(e.target.value); p.landAreaSource = p.landArea_m2 === null ? null : 'manual'; markDirty(true); renderDetail(); renderProperties();
     } });
-    var landRow = el('div', { class: 'inline' }, [
-      field('Land area (m²)', landInput),
-      el('span', { class: 'source-tag', text: p.landAreaSource ? 'source: ' + p.landAreaSource : 'not set' }),
-      p.parcelPolygon && p.landAreaSource !== 'traced' ? el('button', { class: 'tiny secondary', text: 'use traced (' + fmt(p.parcelPolygon.area_m2, 1) + ' m²)', onclick: function () { p.landAreaSource = 'traced'; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); } }) : null
+    var lv = Valuation.landValueFor(proj, p);
+    var landLine = el('p', { class: 'help' }, [
+      'Land value: ', el('b', { text: lv.value === null ? '–' : money(lv.value) }), ' = ' + money(lv.rateInfo.rate) + ' per m² (' + lv.rateInfo.label + (lv.rateInfo.basis === 'default' ? ', default rate' : '') + ') × ' + fmt(lv.landArea, 1) + ' m²'
     ]);
-    box.appendChild(el('fieldset', null, [el('legend', { text: 'Land parcel' }), parcelInfo, landRow]));
+    var landFields = [field('Land area (m²)', landInput), el('span', { class: 'source-tag', text: p.landAreaSource ? 'source: ' + p.landAreaSource : 'not set' }),
+      p.parcelPolygon && p.landAreaSource !== 'traced' ? el('button', { type: 'button', class: 'btn tiny', text: 'use traced (' + fmt(p.parcelPolygon.area_m2, 1) + ' m²)', onclick: function () { p.landAreaSource = 'traced'; syncAreas(p); markDirty(true); renderDetail(); renderProperties(); } }) : null];
+    if (isAdvanced()) landFields.push(field('Rate override (per m², optional)', el('input', { type: 'number', step: 'any', min: 0, value: p.landRateOverride === null ? '' : p.landRateOverride, onchange: function (e) { p.landRateOverride = numOrNull(e.target.value); markDirty(true); renderDetail(); } })));
+    box.appendChild(el('fieldset', null, [el('legend', { text: 'Land parcel' }), parcelInfo, el('div', { class: 'inline' }, landFields), landLine]));
 
-    // sample values
-    var basis = proj.valueBasis === 'capital' ? 'capital value' : 'annual rental value';
-    box.appendChild(el('fieldset', null, [
-      el('legend', { text: 'Sample values (' + proj.currency + ', ' + basis + ') – optional, valuer-assessed' }),
-      el('div', { class: 'grid' }, [
-        field('Land value', textInput(p, 'landValue', { type: 'number', step: 'any', numeric: true, refit: true })),
-        field('Improvement (building) value', textInput(p, 'improvementValue', { type: 'number', step: 'any', numeric: true, refit: true })),
-        field('Total entered (if not split)', textInput(p, 'totalValueEntered', { type: 'number', step: 'any', numeric: true }))
-      ]),
-      el('p', { class: 'muted small', text: 'Leave blank for properties that are not in the valuer\'s sample. Land and improvement are fitted as separate models.' })
-    ]));
+    // valuer total
+    var basis = proj.valueBasis === 'annual_rental' ? 'annual rental value' : 'capital value';
+    box.appendChild(el('fieldset', null, [el('legend', { text: 'Valuer\'s total value (' + proj.currency + ', ' + basis + ') – sample properties only' }),
+      el('div', { class: 'grid' }, [field('Total value of land and buildings', textInput(p, 'totalValue', { type: 'number', step: 'any', numeric: true, refit: true }), 'big-field')]),
+      el('p', { class: 'help', text: 'Leave blank for properties the valuer has not assessed. The building value the model learns from is this total minus the land value above.' })]));
 
     // characteristics
     var charBox = el('div', { class: 'grid' });
-    if (!proj.features.length) charBox.appendChild(el('p', { class: 'muted small', text: 'No characteristics defined yet (see tab 2).' }));
-    proj.features.forEach(function (f) {
-      if (f.source === 'zone') { charBox.appendChild(field(f.name + ' (' + f.appliesTo + ')', el('input', { type: 'text', disabled: true, value: p.zone || '', title: 'Taken from the Zone field above' }))); return; }
+    var feats = Valuation.modelFeatures(proj);
+    if (!feats.length) charBox.appendChild(el('p', { class: 'help', text: isAdvanced() ? 'No characteristics defined (Characteristics tab).' : 'No characteristics yet. Import a file with characteristic columns, or switch to Advanced to add some.' }));
+    feats.forEach(function (f) {
+      if (f.source) { charBox.appendChild(field(f.name, el('input', { type: 'text', disabled: true, value: charsFor(p)[f.id] || '', title: 'Derived automatically' }))); return; }
       var cur = p.characteristics[f.id];
       var input;
       if (f.type === 'numeric') input = el('input', { type: 'number', step: 'any', value: cur === undefined || cur === null ? '' : cur, onchange: function (e) { setChar(p, f.id, numOrNull(e.target.value)); } });
       else if (f.type === 'boolean') input = el('select', { onchange: function (e) { setChar(p, f.id, e.target.value || null); } }, [el('option', { value: '', text: '– not recorded –' }), el('option', { value: 'Yes', text: 'Yes' }), el('option', { value: 'No', text: 'No' })]);
       else input = el('select', { onchange: function (e) { setChar(p, f.id, e.target.value || null); } }, [el('option', { value: '', text: '– not recorded –' })].concat((f.categories || []).map(function (c) { return el('option', { value: c, text: c }); })));
       if (f.type !== 'numeric') input.value = cur === undefined || cur === null ? '' : String(cur);
-      charBox.appendChild(field(f.name + ' (' + f.appliesTo + ')', input));
+      charBox.appendChild(field(f.name, input));
     });
     box.appendChild(el('fieldset', null, [el('legend', { text: 'Characteristics' }), charBox]));
 
@@ -345,25 +356,28 @@
     (p.photoIds || []).forEach(function (id) {
       var img = el('img', { alt: 'property photo' });
       loadPhotoUrl(id).then(function (url) { if (url) img.src = url; });
-      photoBox.appendChild(el('div', { class: 'photo' }, [img, el('button', { class: 'tiny secondary danger', text: '×', title: 'Remove photo', onclick: function () {
+      photoBox.appendChild(el('div', { class: 'photo' }, [img, el('button', { type: 'button', class: 'btn tiny danger', text: '×', title: 'Remove photo', onclick: function () {
         p.photoIds = p.photoIds.filter(function (x) { return x !== id; }); Storage.deletePhoto(id); markDirty(false); renderDetail();
       } })]));
     });
-    var photoInput = el('input', { type: 'file', accept: 'image/*', multiple: true, onchange: function (e) { addPhotos(p, e.target.files); } });
-    box.appendChild(el('fieldset', null, [el('legend', { text: 'Photos' }), photoInput, photoBox]));
+    box.appendChild(el('fieldset', null, [el('legend', { text: 'Photos' }), el('input', { type: 'file', accept: 'image/*', multiple: true, onchange: function (e) { addPhotos(p, e.target.files); } }), photoBox]));
 
     // notes
     var notes = el('textarea', { rows: 2, style: 'width:100%', onchange: function (e) { p.notes = e.target.value; markDirty(false); } });
     notes.value = p.notes || '';
     box.appendChild(el('fieldset', null, [el('legend', { text: 'Notes' }), notes]));
 
-    // predicted values (if models fitted)
-    var v = valueProperty(p);
+    // formula value
+    var v = valueOf(p);
     if (v.total !== null) {
-      box.appendChild(el('fieldset', null, [el('legend', { text: 'Formula value (current models)' }),
-        el('div', { class: 'inline' }, [el('span', { text: 'Land: ' + money(v.land) }), el('span', { text: 'Improvement: ' + money(v.improvement) }), el('strong', { text: 'Total: ' + money(v.total) }),
-          el('button', { class: 'tiny secondary', text: 'calculation sheet', onclick: function () { showSheet(p); } })]),
-        v.flags.length ? el('p', { class: 'muted small', text: v.flags.join('; ') }) : null]));
+      box.appendChild(el('fieldset', null, [el('legend', { text: 'Formula value' }),
+        el('div', { class: 'stat-row' }, [
+          el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Land' }), el('div', { class: 'v', text: money(v.land) })]),
+          el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Buildings' }), el('div', { class: 'v', text: money(v.improvement) })]),
+          el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Total' }), el('div', { class: 'v', text: money(v.total) })]),
+          el('div', { class: 'stat' }, [el('button', { type: 'button', class: 'btn small', text: 'Calculation sheet', onclick: function () { showSheet(p); } })])
+        ]),
+        v.flags.length ? el('p', { class: 'help', text: v.flags.join('; ') }) : null]));
     }
   }
 
@@ -399,23 +413,20 @@
     Mapping.startTool(tool);
     if (btnId) $(btnId).classList.add('armed');
   }
+  function disarm() { $all('.map-tools button').forEach(function (b) { b.classList.remove('armed'); }); }
+
+  function afterGeometryChange(p) {
+    syncAreas(p);
+    if (p.locationSource !== 'manual') locateProperty(p, false);
+    markDirty(true); renderDetail(); renderProperties(); Mapping.render(state.project.properties, p);
+  }
 
   function onPin(lat, lng) {
     var p = selected(); if (!p) return;
-    p.lat = lat; p.lng = lng;
-    $all('.map-tools button').forEach(function (b) { b.classList.remove('armed'); });
-    markDirty(false); renderDetail(); renderProperties(); Mapping.render(state.project.properties, p);
-  }
-
-  function onPolygon(type, geometry, area) {
-    var p = selected(); if (!p) return;
-    $all('.map-tools button').forEach(function (b) { b.classList.remove('armed'); });
-    if (type === 'roof') p.roofPolygons.push({ geometry: geometry, area_m2: area, floors: 1 });
-    else p.parcelPolygon = { geometry: geometry, area_m2: area };
-    if (p.lat === null || p.lng === null) { var c = centroid(geometry); p.lat = c[0]; p.lng = c[1]; }
-    syncAreas(p);
+    p.lat = lat; p.lng = lng; disarm();
+    locateProperty(p, true);
     markDirty(true); renderDetail(); renderProperties(); Mapping.render(state.project.properties, p);
-    toast((type === 'roof' ? 'Rooftop' : 'Parcel') + ' traced: ' + fmt(area, 1) + ' m²');
+    toast(p.areaId !== null ? 'Located in Area ' + p.areaId + (p.sectorKey ? ', Sector ' + p.sectorKey : '') : 'Pin placed outside the mapped Areas.');
   }
 
   function centroid(geometry) {
@@ -424,27 +435,83 @@
     return [lat / pts.length, lng / pts.length];
   }
 
+  function onPolygon(type, geometry, area) {
+    var p = selected(); if (!p) return;
+    disarm();
+    if (type === 'roof') p.roofPolygons.push({ geometry: geometry, area_m2: area, floors: 1 });
+    else p.parcelPolygon = { geometry: geometry, area_m2: area };
+    if (p.lat === null || p.lng === null) { var c = centroid(geometry); p.lat = c[0]; p.lng = c[1]; locateProperty(p, true); }
+    afterGeometryChange(p);
+    toast((type === 'roof' ? 'Rooftop' : 'Parcel') + ' traced: ' + fmt(area, 1) + ' m²');
+  }
+
   function onEdited(changes) {
     var p = selected(); if (!p) return;
     changes.forEach(function (ch) {
       if (ch.type === 'roof' && p.roofPolygons[ch.index]) { p.roofPolygons[ch.index].geometry = ch.geometry; p.roofPolygons[ch.index].area_m2 = ch.area; }
       else if (ch.type === 'parcel' && p.parcelPolygon) { p.parcelPolygon.geometry = ch.geometry; p.parcelPolygon.area_m2 = ch.area; }
-      else if (ch.type === 'pin') { p.lat = ch.lat; p.lng = ch.lng; }
+      else if (ch.type === 'pin') { p.lat = ch.lat; p.lng = ch.lng; locateProperty(p, true); }
     });
-    syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(state.project.properties, p);
+    afterGeometryChange(p);
   }
 
   function onDeleted(removed) {
     var p = selected(); if (!p) return;
-    var roofIdx = removed.filter(function (r) { return r.type === 'roof'; }).map(function (r) { return r.index; }).sort(function (a, b) { return b - a; });
-    roofIdx.forEach(function (i) { p.roofPolygons.splice(i, 1); });
+    removed.filter(function (r) { return r.type === 'roof'; }).map(function (r) { return r.index; }).sort(function (a, b) { return b - a; }).forEach(function (i) { p.roofPolygons.splice(i, 1); });
     if (removed.some(function (r) { return r.type === 'parcel'; })) p.parcelPolygon = null;
     if (removed.some(function (r) { return r.type === 'pin'; })) { p.lat = null; p.lng = null; }
-    syncAreas(p); markDirty(true); renderDetail(); renderProperties(); Mapping.render(state.project.properties, p);
+    afterGeometryChange(p);
   }
 
   /* ------------------------------------------------------------------ */
-  /* Rendering: features                                                 */
+  /* Land rates tab                                                      */
+  /* ------------------------------------------------------------------ */
+
+  function renderRates() {
+    var proj = state.project, lr = proj.landRates;
+    $all('#rate-level-toggle button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-level') === lr.level); });
+    $('#rate-uplift').value = lr.upliftFactor;
+    $('#rate-default').value = lr.defaultRate;
+    $('#value-basis').value = proj.valueBasis;
+    $('#rates-key-head').textContent = lr.level === 'sector' ? 'Sector' : 'Area';
+    var tbody = $('#rates-table tbody');
+    tbody.innerHTML = '';
+    var isSector = lr.level === 'sector';
+    var entries = isSector ? lr.sectors : lr.areas;
+    var keys = isSector ? Geo.sectorKeys().slice() : Geo.areaIds().map(String);
+    Object.keys(entries).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+    keys.sort(function (a, b) { var pa = a.split('/').map(Number), pb = b.split('/').map(Number); return (pa[0] - pb[0]) || ((pa[1] || 0) - (pb[1] || 0)); });
+    var counts = {};
+    proj.properties.forEach(function (p) { var ri = Valuation.landRateFor(proj, p); if (ri.key) counts[ri.key] = (counts[ri.key] || 0) + 1; });
+    var withRate = 0;
+    keys.forEach(function (k) {
+      var e = entries[k] || null;
+      if (e && numOrNull(e.rate) !== null) withRate++;
+      var info = isSector ? Geo.sectorInfo(k) : Geo.areaInfo(k);
+      var rateInput = el('input', { type: 'number', step: 'any', min: 0, value: e && e.rate !== null && e.rate !== undefined ? e.rate : '', placeholder: 'default', onchange: function (ev) {
+        var v = numOrNull(ev.target.value);
+        if (v === null) { delete entries[k]; }
+        else { entries[k] = Object.assign({ n: null, p25: null, p75: null }, entries[k] || {}, { rate: v, source: (entries[k] && entries[k].source && /QVR 2011/.test(entries[k].source) && entries[k].rate !== v) ? 'edited by valuer' : (entries[k] ? entries[k].source : 'entered by valuer') }); }
+        markDirty(true); renderRates();
+      } });
+      var noteInput = el('input', { type: 'text', value: e ? (e.note || '') : '', placeholder: e ? '' : 'no rate: default applies', disabled: !e, onchange: function (ev) { if (entries[k]) { entries[k].note = ev.target.value; markDirty(false); } } });
+      tbody.appendChild(el('tr', { class: e ? '' : 'dim' }, [
+        el('td', { text: (isSector ? 'Sector ' : 'Area ') + k }),
+        el('td', { text: info && info.Land_Use ? info.Land_Use : '' }),
+        el('td', { class: 'num' }, [rateInput]),
+        el('td', { class: 'num', text: e && numOrNull(e.rate) !== null ? money(numOrNull(e.rate) * (numOrNull(lr.upliftFactor) || 1)) : money((numOrNull(lr.defaultRate) || 0) * (numOrNull(lr.upliftFactor) || 1)) + ' (default)' }),
+        el('td', { class: 'num', text: e && e.n ? String(e.n) : '' }),
+        el('td', { class: 'num', text: e && e.p25 !== null && e.p25 !== undefined ? fmt(e.p25, 0) + ' – ' + fmt(e.p75, 0) : '' }),
+        el('td', null, [el('div', { class: 'help', text: e ? (e.source || '') : '' }), noteInput]),
+        el('td', { class: 'num', text: counts[k] ? String(counts[k]) : '' })
+      ]));
+    });
+    var defaultCount = proj.properties.filter(function (p) { return Valuation.landRateFor(proj, p).basis === 'default'; }).length;
+    $('#rates-summary').textContent = withRate + ' of ' + keys.length + ' ' + (isSector ? 'sectors' : 'areas') + ' have a rate' + (defaultCount ? '; ' + defaultCount + ' properties currently use the default rate' : '') + '.';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Characteristics tab                                                 */
   /* ------------------------------------------------------------------ */
 
   function renderFeatures() {
@@ -453,7 +520,9 @@
     var proj = state.project;
     proj.features.forEach(function (f, idx) {
       if (f.source === 'zone') f.categories = zoneCategories();
-      var catInput = el('input', { type: 'text', value: (f.categories || []).join(', '), placeholder: 'e.g. Good, Average, Bad', style: 'width: 100%', disabled: f.type !== 'categorical' || f.source === 'zone', title: f.source === 'zone' ? 'Categories follow the Zone field of the properties' : null, onchange: function (e) {
+      if (f.source === 'landuse') f.categories = landUseCategories();
+      var derived = !!f.source;
+      var catInput = el('input', { type: 'text', value: (f.categories || []).join(', '), placeholder: 'e.g. Good, Average, Bad', style: 'width: 100%', disabled: f.type !== 'categorical' || derived, onchange: function (e) {
         f.categories = e.target.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
         if (f.baseCategory && f.categories.indexOf(f.baseCategory) < 0) f.baseCategory = null;
         markDirty(true); renderFeatures();
@@ -461,23 +530,20 @@
       var baseSel = el('select', { disabled: f.type !== 'categorical', onchange: function (e) { f.baseCategory = e.target.value || null; markDirty(true); } },
         [el('option', { value: '', text: 'base: most common' })].concat((f.categories || []).map(function (c) { return el('option', { value: c, text: 'base: ' + c }); })));
       baseSel.value = f.baseCategory || '';
-      var typeSel = el('select', { disabled: f.source === 'zone', onchange: function (e) { f.type = e.target.value; if (f.type !== 'categorical') { f.categories = []; f.baseCategory = null; } markDirty(true); renderFeatures(); } },
+      var typeSel = el('select', { disabled: derived, onchange: function (e) { f.type = e.target.value; if (f.type !== 'categorical') { f.categories = []; f.baseCategory = null; } markDirty(true); renderFeatures(); } },
         ['categorical', 'boolean', 'numeric'].map(function (t) { return el('option', { value: t, text: t }); }));
       typeSel.value = f.type;
-      var applySel = el('select', { onchange: function (e) { f.appliesTo = e.target.value; markDirty(true); } },
-        [['land', 'Land'], ['improvement', 'Improvement'], ['both', 'Both']].map(function (a) { return el('option', { value: a[0], text: a[1] }); }));
-      applySel.value = f.appliesTo || 'improvement';
       var cond = el('input', { type: 'checkbox', checked: !!f.isCondition, onchange: function (e) { f.isCondition = e.target.checked; markDirty(false); renderFeatures(); } });
       tbody.appendChild(el('tr', null, [
-        el('td', null, [el('input', { type: 'text', value: f.name, onchange: function (e) { f.name = e.target.value; markDirty(true); } }), f.source === 'zone' ? el('div', { class: 'muted small', text: 'mirrors the Zone field' }) : null]),
+        el('td', null, [el('input', { type: 'text', value: f.name, onchange: function (e) { f.name = e.target.value; markDirty(true); } }), derived ? el('div', { class: 'help', text: f.source === 'zone' ? 'mirrors the Zone field' : 'from the Sector land-use map layer' }) : null]),
         el('td', null, [typeSel]),
-        el('td', null, [applySel]),
         el('td', null, [el('div', { class: 'inline' }, [catInput, baseSel])]),
         el('td', null, [cond]),
-        el('td', null, [el('button', { class: 'tiny secondary danger', text: 'delete', onclick: function () {
+        el('td', null, [el('button', { type: 'button', class: 'btn tiny danger', text: 'delete', onclick: function () {
           if (!confirm('Delete characteristic "' + f.name + '"? Values recorded for it on properties are removed.')) return;
           proj.features.splice(idx, 1);
           proj.properties.forEach(function (p) { delete p.characteristics[f.id]; });
+          delete proj.model.included['f:' + f.id];
           markDirty(true); renderFeatures();
         } })])
       ]));
@@ -485,220 +551,253 @@
     $('#condition-notice').hidden = !proj.features.some(function (f) { return f.isCondition; });
   }
 
+  function zoneCategories() {
+    var cats = {};
+    state.project.properties.forEach(function (p) { if (p.zone && String(p.zone).trim()) cats[String(p.zone).trim()] = true; });
+    return Object.keys(cats).sort();
+  }
+
   function addFeature(f) {
     var proj = state.project;
     var base = f.id; var n = 1;
     while (proj.features.some(function (x) { return x.id === f.id; })) f.id = base + '_' + (++n);
+    f.appliesTo = 'improvement';
     proj.features.push(f);
   }
 
   /* ------------------------------------------------------------------ */
-  /* Rendering: models                                                   */
+  /* Model tab (advanced)                                                */
   /* ------------------------------------------------------------------ */
 
-  function renderModels() { MODEL_KINDS.forEach(renderModel); }
-
-  function renderModel(kind) {
-    var card = $('#model-' + kind);
-    var spec = state.project.models[kind];
+  function renderModel() {
+    var card = $('#model-card');
+    var spec = state.project.model;
     var proj = state.project;
     card.innerHTML = '';
-    var rows = sampleRows(kind);
-    card.appendChild(el('h3', null, [MODEL_LABEL[kind], el('span', { class: 'muted small', text: rows.length + ' sample properties with a ' + kind + ' value' })]));
+    var prep = Valuation.modelRows(proj, charsFor);
+    card.appendChild(el('p', { class: 'section-hint', text: prep.samples + ' sample properties with a usable building value (valuer total minus land value).' }));
 
-    var formSel = el('select', { id: 'form-' + kind, onchange: function (e) {
+    var formSel = el('select', { id: 'form-select', onchange: function (e) {
       spec.form = e.target.value;
-      // area / base locks are in form-specific units: drop them on a form change
-      Object.keys(spec.locks).forEach(function (k) { if (k === 'area' || k === 'intercept' || k.indexOf('f:') === 0 && proj.features.some(function (f) { return f.type === 'numeric' && k === 'f:' + f.id; })) delete spec.locks[k]; });
-      fitModel(kind, true);
+      Object.keys(spec.locks).forEach(function (k) { if (k === 'area' || k === 'intercept' || (k.indexOf('f:') === 0 && proj.features.some(function (f) { return f.type === 'numeric' && k === 'f:' + f.id; }))) delete spec.locks[k]; });
+      fitModel(true);
     } }, [['loglinear', 'Log-linear (default)'], ['loglog', 'Log-log (LoGRI guidance)'], ['linear', 'Linear']].map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
     formSel.value = spec.form;
-    var smear = el('input', { type: 'checkbox', checked: !!spec.smearing, disabled: spec.form === 'linear', onchange: function (e) { spec.smearing = e.target.checked; fitModel(kind, true); } });
-    card.appendChild(el('div', { class: 'model-controls' }, [
+    var smear = el('input', { type: 'checkbox', checked: !!spec.smearing, disabled: spec.form === 'linear', onchange: function (e) { spec.smearing = e.target.checked; fitModel(true); } });
+    card.appendChild(el('div', { class: 'toolbar' }, [
       el('label', null, ['Model form ', formSel]),
-      el('label', { title: 'Duan smearing: corrects the downward bias of exponentiated log predictions. Off by default to match the LoGRI guidance note.' }, [smear, ' Bias correction (smearing)']),
-      el('button', { id: 'fit-' + kind, text: 'Fit / refit', onclick: function () { fitModel(kind, false); } }),
-      el('button', { id: 'compare-' + kind, class: 'secondary', text: 'Compare forms', onclick: function () { renderCompare(kind, card); } })
+      el('label', { class: 'check', title: 'Duan smearing corrects the downward bias of exponentiated log predictions. Off by default, as in the LoGRI guidance note.' }, [smear, ' Bias correction (smearing)']),
+      el('button', { type: 'button', class: 'btn primary', id: 'fit-model', text: 'Fit / refit', onclick: function () { fitModel(false); } }),
+      el('button', { type: 'button', class: 'btn', id: 'compare-forms', text: 'Compare forms', onclick: function () { renderCompare(card); } })
     ]));
-    card.appendChild(el('p', { class: 'muted small', text: Formula.formDescription(spec.form) }));
+    card.appendChild(el('p', { class: 'help', text: Formula.formDescription(spec.form) }));
 
     var fit = spec.fit;
-    if (!fit) { card.appendChild(el('p', { class: 'muted', text: 'Not fitted yet. Enter ' + kind + ' values and areas for sample properties, then click Fit.' })); return; }
-    if (fit.warnings && fit.warnings.length) card.appendChild(el('div', { class: 'warnings' }, [el('strong', { text: 'Check:' }), el('ul', null, fit.warnings.map(function (w) { return el('li', { text: w }); }))]));
+    if (!fit) { card.appendChild(el('p', { class: 'help', text: 'Not fitted yet. Enter valuer totals for sample properties, then click Fit.' })); return; }
+    if (fit.warnings && fit.warnings.length) card.appendChild(el('div', { class: 'warnings' }, [el('b', { text: 'Check:' }), el('ul', null, fit.warnings.map(function (w) { return el('li', { text: w }); }))]));
+    if (fit.residualIssues && fit.residualIssues.length) card.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: fit.residualIssues.length + ' sample propert' + (fit.residualIssues.length === 1 ? 'y' : 'ies') + ' could not be used' }),
+      el('ul', { class: 'drawer-body help' }, fit.residualIssues.map(function (x) { var p = findProperty(x.id); return el('li', { text: (p ? p.plotNo : x.id) + ': ' + x.reason }); }))]));
     if (!fit.ok) return;
 
-    card.appendChild(el('div', { class: 'formula', id: 'formula-' + kind, text: Formula.formulaText(fit.form, AREA_LABEL[kind].replace(' (m²)', '')) }));
-    var stats = el('div', { class: 'stats', id: 'stats-' + kind });
-    Formula.fitSummary(fit, proj.currency).forEach(function (s) {
-      stats.appendChild(el('div', { class: 'stat', title: s.help }, [el('div', { class: 'label', text: s.label }), el('div', { class: 'value', text: s.value })]));
-    });
+    card.appendChild(el('div', { class: 'formula', id: 'formula-text', text: Formula.formulaText(fit.form, 'Built area') }));
+    var stats = el('div', { class: 'stats-grid', id: 'model-stats' });
+    Formula.fitSummary(fit, proj.currency).forEach(function (s) { stats.appendChild(el('div', { class: 'stat', title: s.help }, [el('div', { class: 'k', text: s.label }), el('div', { class: 'v', text: s.value })])); });
     card.appendChild(stats);
-    if (fit.excluded && fit.excluded.length) card.appendChild(el('details', null, [el('summary', { text: fit.excluded.length + ' sample propert' + (fit.excluded.length === 1 ? 'y' : 'ies') + ' excluded from the fit' }),
-      el('ul', { class: 'small' }, fit.excluded.map(function (x) { var p = findProperty(x.id); return el('li', { text: (p ? p.plotNo : x.id) + ': ' + x.reason }); }))]));
+    if (fit.excluded && fit.excluded.length) card.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: fit.excluded.length + ' sample propert' + (fit.excluded.length === 1 ? 'y' : 'ies') + ' excluded from the fit' }),
+      el('ul', { class: 'drawer-body help' }, fit.excluded.map(function (x) { var p = findProperty(x.id); return el('li', { text: (p ? p.plotNo : x.id) + ': ' + x.reason }); }))]));
 
-    // weights table
-    var table = el('table', { class: 'compact weights', id: 'weights-' + kind });
-    table.appendChild(el('thead', null, [el('tr', null, ['Term', 'n', 'In model', 'Weight', 'Lock', 'Locked value', 'Std. error', 'p-value', 'Confidence'].map(function (h) { return el('th', { text: h }); }))]));
-    var tbody = el('tbody');
-    Formula.weightsTable(fit, proj.currency).forEach(function (w) {
-      var c = w.column;
-      var isBase = c.isBase;
-      var incl = el('input', { type: 'checkbox', checked: w.status !== 'excluded', disabled: isBase || c.kind === 'intercept' || c.kind === 'area', onchange: function (e) { spec.included[c.key] = e.target.checked; fitModel(kind, true); } });
-      var lockChk = el('input', { type: 'checkbox', checked: w.status === 'locked', disabled: isBase || w.status === 'excluded', onchange: function (e) {
-        if (e.target.checked) { var d = w.display; spec.locks[c.key] = d === null ? 0 : Math.round(d * 1000) / 1000; } else delete spec.locks[c.key];
-        fitModel(kind, true);
-      } });
-      var lockVal = el('input', { type: 'number', step: 'any', class: 'short', disabled: w.status !== 'locked', value: w.status === 'locked' ? spec.locks[c.key] : '', onchange: function (e) {
-        var v = numOrNull(e.target.value); if (v === null) return; spec.locks[c.key] = v; fitModel(kind, true);
-      } });
-      var unitText = w.status === 'locked' ? ' ' + w.unit.replace('currency', proj.currency) : '';
-      tbody.appendChild(el('tr', { class: 'status-' + w.status }, [
-        el('td', { text: c.label + (isBase ? ' (base)' : '') }),
-        el('td', { class: 'num', text: c.kind === 'category' ? String(w.count || 0) : '' }),
-        el('td', null, [incl]),
-        el('td', { class: 'num', text: w.status === 'excluded' ? '–' : w.weightText }),
-        el('td', null, [lockChk]),
-        el('td', null, [lockVal, el('span', { class: 'muted small', text: unitText })]),
-        el('td', { class: 'num', text: w.se === null || w.se === undefined ? '–' : fmt(w.se, 4) }),
-        el('td', { class: 'num', text: Formula.fmtP(w.p) }),
-        el('td', null, [el('span', { class: 'badge ' + w.significance.code, text: w.significance.label })])
-      ]));
-    });
-    table.appendChild(tbody);
-    card.appendChild(el('div', { class: 'table-wrap' }, [table]));
-    card.appendChild(el('p', { class: 'muted small', text: 'Weights for log forms are percentages relative to the base property; the base value is the value of a base property before the area term. Locking a weight fixes it at the value you type and refits the other weights around it (offset method).' }));
+    card.appendChild(el('div', { class: 'table-scroll' }, [weightsTable(fit, true)]));
+    card.appendChild(el('p', { class: 'help', text: 'Weights for log forms are percentages relative to the base property. Locking a weight fixes it at the value you type and refits the other weights around it (offset method).' }));
 
-    // sample fit table
-    var st = el('table', { class: 'compact' });
-    st.appendChild(el('thead', null, [el('tr', null, ['Plot no.', 'Actual', 'Predicted', 'Ratio', 'Leave-one-out'].map(function (h) { return el('th', { text: h }); }))]));
+    var st = el('table', { class: 'data compact' });
+    st.appendChild(el('thead', null, [el('tr', null, ['Plot no.', 'Building value (valuer total − land)', 'Predicted', 'Ratio', 'Leave-one-out'].map(function (h) { return el('th', { text: h }); }))]));
     var stb = el('tbody');
     fit.sample.forEach(function (s) {
       var p = findProperty(s.id);
       stb.appendChild(el('tr', null, [el('td', { text: p ? p.plotNo : s.id }), el('td', { class: 'num', text: money(s.actual) }), el('td', { class: 'num', text: money(s.predicted) }), el('td', { class: 'num', text: fmt(s.ratio, 3) }), el('td', { class: 'num', text: s.loo === null ? '–' : money(s.loo) })]));
     });
     st.appendChild(stb);
-    card.appendChild(el('details', null, [el('summary', { text: 'Sample properties: actual vs predicted' }), el('div', { class: 'table-wrap' }, [st])]));
-    card.appendChild(el('div', { class: 'compare', id: 'compare-box-' + kind }));
+    card.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: 'Sample properties: actual vs predicted building value' }), el('div', { class: 'drawer-body table-scroll' }, [st])]));
+    card.appendChild(el('div', { id: 'compare-box' }));
   }
 
-  function renderCompare(kind, card) {
-    var box = $('#compare-box-' + kind, card) || card.appendChild(el('div', { class: 'compare', id: 'compare-box-' + kind }));
+  function weightsTable(fit, editable) {
+    var spec = state.project.model, proj = state.project;
+    var table = el('table', { class: 'data compact', id: editable ? 'weights-table' : 'weights-readonly' });
+    var heads = editable ? ['Term', 'n', 'In model', 'Weight', 'Lock', 'Locked value', 'Std. error', 'p-value', 'Confidence'] : ['Term', 'Weight', 'Confidence'];
+    table.appendChild(el('thead', null, [el('tr', null, heads.map(function (h) { return el('th', { text: h }); }))]));
+    var tbody = el('tbody');
+    Formula.weightsTable(fit, proj.currency).forEach(function (w) {
+      var c = w.column, isBase = c.isBase;
+      if (!editable && w.status === 'excluded') return;
+      var cells = [el('td', { text: c.label + (isBase ? ' (base)' : '') })];
+      if (editable) {
+        var incl = el('input', { type: 'checkbox', checked: w.status !== 'excluded', disabled: isBase || c.kind === 'intercept' || c.kind === 'area', onchange: function (e) { spec.included[c.key] = e.target.checked; fitModel(true); } });
+        var lockChk = el('input', { type: 'checkbox', checked: w.status === 'locked', disabled: isBase || w.status === 'excluded', onchange: function (e) {
+          if (e.target.checked) { var d = w.display; spec.locks[c.key] = d === null ? 0 : Math.round(d * 1000) / 1000; } else delete spec.locks[c.key];
+          fitModel(true);
+        } });
+        var lockVal = el('input', { type: 'number', step: 'any', class: 'short', disabled: w.status !== 'locked', value: w.status === 'locked' ? spec.locks[c.key] : '', onchange: function (e) {
+          var v = numOrNull(e.target.value); if (v === null) return; spec.locks[c.key] = v; fitModel(true);
+        } });
+        cells.push(el('td', { class: 'num', text: c.kind === 'category' ? String(w.count || 0) : '' }), el('td', null, [incl]),
+          el('td', { class: 'num', text: w.status === 'excluded' ? '–' : w.weightText }), el('td', null, [lockChk]),
+          el('td', null, [lockVal, el('span', { class: 'help', text: w.status === 'locked' ? ' ' + w.unit.replace('currency', proj.currency) : '' })]),
+          el('td', { class: 'num', text: w.se === null || w.se === undefined ? '–' : fmt(w.se, 4) }), el('td', { class: 'num', text: Formula.fmtP(w.p) }));
+      } else cells.push(el('td', { class: 'num', text: w.weightText }));
+      cells.push(el('td', null, [el('span', { class: 'badge ' + w.significance.code, text: w.significance.label })]));
+      tbody.appendChild(el('tr', { class: 'status-' + w.status }, cells));
+    });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function renderCompare(card) {
+    var box = $('#compare-box', card);
     box.innerHTML = '';
-    var results = Engine.FORMS.map(function (form) { var s = buildSpec(kind, form); var f = Engine.fit(s, s.rows); return { form: form, fit: f }; });
-    if (!results.some(function (r) { return r.fit.ok; })) { box.appendChild(el('p', { class: 'muted', text: 'Nothing to compare yet.' })); return; }
-    var t = el('table', { class: 'compact' });
+    var results = Engine.FORMS.map(function (form) { var s = buildSpec(form); return { form: form, fit: Engine.fit(s, s.rows) }; });
+    if (!results.some(function (r) { return r.fit.ok; })) { box.appendChild(el('p', { class: 'help', text: 'Nothing to compare yet.' })); return; }
+    var t = el('table', { class: 'data compact' });
     t.appendChild(el('thead', null, [el('tr', null, ['Form', 'R² (fit scale)', 'R² on values', 'RMSE', 'Leave-one-out RMSE', 'COD', 'PRD'].map(function (h) { return el('th', { text: h }); }))]));
     var tb = el('tbody');
     results.forEach(function (r) {
       var f = r.fit;
-      tb.appendChild(el('tr', { class: r.form === state.project.models[kind].form ? 'selected' : '' }, [
+      tb.appendChild(el('tr', { class: r.form === state.project.model.form ? 'selected' : '' }, [
         el('td', { text: { linear: 'Linear', loglinear: 'Log-linear', loglog: 'Log-log' }[r.form] }),
         el('td', { class: 'num', text: fmt(f.r2, 3) }), el('td', { class: 'num', text: fmt(f.r2Level, 3) }), el('td', { class: 'num', text: money(f.rmse) }),
         el('td', { class: 'num', text: f.loocvRmse === null ? '–' : money(f.loocvRmse) }), el('td', { class: 'num', text: fmt(f.cod, 1) + ' %' }), el('td', { class: 'num', text: fmt(f.prd, 3) })
       ]));
     });
     t.appendChild(tb);
-    box.appendChild(el('div', { class: 'subhead' }, [el('strong', { text: 'Comparison of model forms (same terms and locks; area lock dropped where units differ)' })]));
-    box.appendChild(t);
-    box.appendChild(el('p', { class: 'muted small', text: 'R² on the fit scale is not comparable between log and linear forms; compare RMSE, leave-one-out RMSE and COD on values instead.' }));
+    box.appendChild(el('h3', { text: 'Comparison of model forms (same terms and locks; area lock dropped where units differ)' }));
+    box.appendChild(el('div', { class: 'table-scroll' }, [t]));
+    box.appendChild(el('p', { class: 'help', text: 'R² on the fit scale is not comparable between log and linear forms; compare RMSE, leave-one-out RMSE and COD on values instead.' }));
   }
 
   /* ------------------------------------------------------------------ */
-  /* Rendering: valuation roll                                           */
+  /* Results tab                                                         */
   /* ------------------------------------------------------------------ */
 
   function rollRows() {
     return state.project.properties.map(function (p) {
-      var v = valueProperty(p);
-      var sampleTotal = (numOrNull(p.landValue) || 0) + (numOrNull(p.improvementValue) || 0);
-      if (!isSample(p)) sampleTotal = null;
+      var v = valueOf(p);
+      var sampleTotal = numOrNull(p.totalValue);
       return { p: p, v: v, sampleTotal: sampleTotal, ratio: (sampleTotal && v.total !== null) ? v.total / sampleTotal : null };
     });
   }
 
-  function renderRoll() {
+  function renderResults() {
+    var proj = state.project, fit = proj.model.fit;
+    var box = $('#results-summary');
+    box.innerHTML = '';
+    var rows = rollRows();
+    var totals = { land: 0, improvement: 0, total: 0, n: 0, defaults: 0 };
+    rows.forEach(function (r) { if (r.v.total !== null) { totals.n++; totals.land += r.v.land || 0; totals.improvement += r.v.improvement || 0; totals.total += r.v.total; } if (r.v.rateInfo && r.v.rateInfo.basis === 'default') totals.defaults++; });
+
+    var lead = el('div', { class: 'lead' });
+    if (!fit || !fit.ok) {
+      lead.appendChild(el('p', null, [el('b', { text: 'The building model is not fitted yet. ' }), 'Enter the valuer\'s total value for a sample of properties on the Properties tab. Land values are already calculated from the rates.']));
+    } else {
+      lead.appendChild(el('p', null, [el('b', { text: 'Model fitted on ' + fit.n + ' sample properties. ' }), 'Typical error of a building value on the sample: ' + money(fit.rmse) + (fit.loocvRmse !== null ? ' (' + money(fit.loocvRmse) + ' when each property is predicted without itself)' : '') + '. R² ' + fmt(fit.r2, 2) + '; median formula ÷ valuer ratio ' + fmt(fit.medianRatio, 2) + '; COD ' + fmt(fit.cod, 0) + ' %.']));
+      lead.appendChild(el('p', { class: 'help', text: Formula.formulaText(fit.form, 'Built area') + '. Land value = rate per m² × parcel area. Total = land + buildings.' }));
+    }
+    lead.appendChild(el('p', { class: 'help', text: 'Land rates by ' + (proj.landRates.level === 'sector' ? 'Sector' : 'Area') + (numOrNull(proj.landRates.upliftFactor) !== 1 ? ', uplift factor ' + fmt(proj.landRates.upliftFactor, 2) : ', no uplift') + (totals.defaults ? '; ' + totals.defaults + ' properties use the default rate' : '') + '.' }));
+    var allWarnings = (fit && fit.warnings) ? fit.warnings : [];
+    if (allWarnings.length) lead.appendChild(el('div', { class: 'warnings' }, [el('b', { text: 'Check:' }), el('ul', null, allWarnings.map(function (w) { return el('li', { text: w }); }))]));
+    var statRow = el('div', { class: 'stat-row' }, [
+      el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Valued' }), el('div', { class: 'v', text: totals.n + ' / ' + rows.length })]),
+      el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Land' }), el('div', { class: 'v', text: money(totals.land) })]),
+      el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Buildings' }), el('div', { class: 'v', text: money(totals.improvement) })]),
+      el('div', { class: 'stat' }, [el('div', { class: 'k', text: 'Total' }), el('div', { class: 'v', text: money(totals.total) })])
+    ]);
+    box.appendChild(el('div', { class: 'results-headline' }, [lead, statRow]));
+    if (fit && fit.ok) box.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: 'Weights in the building formula' }), el('div', { class: 'drawer-body table-scroll' }, [weightsTable(fit, false)])]));
+
     var tbody = $('#roll-table tbody');
     tbody.innerHTML = '';
-    var rows = rollRows();
-    var totals = { land: 0, improvement: 0, total: 0, n: 0 };
-    rows.forEach(function (r) { if (r.v.total !== null) { totals.n++; totals.land += r.v.land || 0; totals.improvement += r.v.improvement || 0; totals.total += r.v.total; } });
     rows.slice(0, MAX_ROWS).forEach(function (r) {
-      var p = r.p;
+      var p = r.p, ri = r.v.rateInfo;
       tbody.appendChild(el('tr', { class: r.v.total === null ? 'dim' : '' }, [
-        el('td', { text: p.plotNo }), el('td', { text: p.description }), el('td', { text: p.zone }),
-        el('td', { class: 'num', text: fmt(p.landArea_m2, 0) }), el('td', { class: 'num', text: fmt(p.builtArea_m2, 0) }),
-        el('td', { class: 'num', text: fmt(r.v.land, 0) }), el('td', { class: 'num', text: fmt(r.v.improvement, 0) }), el('td', { class: 'num', text: fmt(r.v.total, 0) }),
-        el('td', { class: 'num', text: fmt(r.sampleTotal, 0) }), el('td', { class: 'num', text: fmt(r.ratio, 3) }),
-        el('td', { class: 'small', text: r.v.flags.join('; ') }),
-        el('td', null, [r.v.total !== null ? el('button', { class: 'tiny secondary', text: 'sheet', onclick: function () { showSheet(p); } }) : null])
+        el('td', { text: p.plotNo }), el('td', { text: p.description }), el('td', { text: areaText(p) }),
+        el('td', { class: 'num', text: fmt(p.landArea_m2, 0) }), el('td', { class: 'num', text: ri ? fmt(ri.rate, 0) + (ri.basis === 'default' ? '*' : '') : '' }), el('td', { class: 'num', text: fmt(r.v.land, 0) }),
+        el('td', { class: 'num', text: fmt(p.builtArea_m2, 0) }), el('td', { class: 'num', text: fmt(r.v.improvement, 0) }), el('td', { class: 'num', text: fmt(r.v.total, 0) }),
+        el('td', { class: 'num', text: fmt(r.sampleTotal, 0) }), el('td', { class: 'num', text: fmt(r.ratio, 2) }),
+        el('td', { class: 'help', text: r.v.flags.join('; ') }),
+        el('td', null, [r.v.total !== null ? el('button', { type: 'button', class: 'btn tiny', text: 'sheet', onclick: function () { showSheet(p); } }) : null])
       ]));
     });
-    $('#roll-summary').textContent = totals.n + ' of ' + rows.length + ' properties valued. Totals: land ' + money(totals.land) + ', improvements ' + money(totals.improvement) + ', all ' + money(totals.total) + (rows.length > MAX_ROWS ? '. Showing first ' + MAX_ROWS + ' rows; the export contains all.' : '.');
+    $('#roll-summary').textContent = totals.n + ' of ' + rows.length + ' properties valued' + (rows.length > MAX_ROWS ? ' (first ' + MAX_ROWS + ' shown; the export has all)' : '');
   }
 
   function rollExportRows() {
-    var proj = state.project;
-    var feats = proj.features;
-    var headers = ['PlotNo', 'Description', 'Zone', 'Latitude', 'Longitude', 'LandArea_m2', 'LandAreaSource', 'BuiltArea_m2', 'BuiltAreaSource', 'Floors_traced',
-      'LandValue_formula', 'ImprovementValue_formula', 'TotalValue_formula', 'LandValue_sample', 'ImprovementValue_sample', 'TotalValue_entered', 'Ratio_formula_to_sample', 'Flags', 'Notes', 'Photos']
+    var proj = state.project, feats = Valuation.modelFeatures(proj);
+    var headers = ['PlotNo', 'Description', 'Zone', 'Latitude', 'Longitude', 'LCC_Area', 'LCC_Sector', 'AreaSource', 'LandArea_m2', 'LandAreaSource', 'LandRate_per_m2', 'LandRateBasis', 'LandRateSource',
+      'BuiltArea_m2', 'BuiltAreaSource', 'Floors_traced', 'LandValue', 'ImprovementValue', 'TotalValue', 'ValuerTotal_sample', 'Ratio_formula_to_valuer', 'Flags', 'Notes', 'Photos']
       .concat(feats.map(function (f) { return 'char_' + f.name; }));
     var rows = rollRows().map(function (r) {
-      var p = r.p;
+      var p = r.p, ri = r.v.rateInfo || {};
       var o = {
-        PlotNo: p.plotNo, Description: p.description, Zone: p.zone, Latitude: p.lat, Longitude: p.lng,
-        LandArea_m2: p.landArea_m2, LandAreaSource: p.landAreaSource || '', BuiltArea_m2: p.builtArea_m2, BuiltAreaSource: p.builtAreaSource || '',
-        Floors_traced: (p.roofPolygons || []).map(function (x) { return x.floors || 1; }).join('|'),
-        LandValue_formula: r.v.land === null ? '' : Math.round(r.v.land), ImprovementValue_formula: r.v.improvement === null ? '' : Math.round(r.v.improvement), TotalValue_formula: r.v.total === null ? '' : Math.round(r.v.total),
-        LandValue_sample: p.landValue, ImprovementValue_sample: p.improvementValue, TotalValue_entered: p.totalValueEntered,
-        Ratio_formula_to_sample: r.ratio === null ? '' : Math.round(r.ratio * 1000) / 1000, Flags: r.v.flags.join('; '), Notes: p.notes, Photos: (p.photoIds || []).length
+        PlotNo: p.plotNo, Description: p.description, Zone: p.zone, Latitude: p.lat, Longitude: p.lng, LCC_Area: p.areaId, LCC_Sector: p.sectorKey, AreaSource: p.locationSource || '',
+        LandArea_m2: p.landArea_m2, LandAreaSource: p.landAreaSource || '', LandRate_per_m2: ri.rate === undefined ? '' : Math.round(ri.rate * 100) / 100, LandRateBasis: ri.basis || '', LandRateSource: ri.source || '',
+        BuiltArea_m2: p.builtArea_m2, BuiltAreaSource: p.builtAreaSource || '', Floors_traced: (p.roofPolygons || []).map(function (x) { return x.floors || 1; }).join('|'),
+        LandValue: r.v.land === null ? '' : Math.round(r.v.land), ImprovementValue: r.v.improvement === null ? '' : Math.round(r.v.improvement), TotalValue: r.v.total === null ? '' : Math.round(r.v.total),
+        ValuerTotal_sample: p.totalValue, Ratio_formula_to_valuer: r.ratio === null ? '' : Math.round(r.ratio * 1000) / 1000, Flags: r.v.flags.join('; '), Notes: p.notes, Photos: (p.photoIds || []).length
       };
-      feats.forEach(function (f) { o['char_' + f.name] = p.characteristics[f.id] === undefined ? '' : p.characteristics[f.id]; });
+      var chars = charsFor(p);
+      feats.forEach(function (f) { o['char_' + f.name] = chars[f.id] === undefined ? '' : chars[f.id]; });
       return o;
     });
     return { headers: headers, rows: rows };
   }
 
   function weightsExportRows() {
-    var proj = state.project;
-    var rows = [];
-    MODEL_KINDS.forEach(function (kind) {
-      var fit = proj.models[kind].fit;
-      if (!fit || !fit.ok) return;
+    var proj = state.project, fit = proj.model.fit, rows = [];
+    if (fit && fit.ok) {
       Formula.weightsTable(fit, proj.currency).forEach(function (w) {
-        rows.push({ Model: kind, Form: fit.form, Term: w.column.label, Kind: w.column.kind, Status: w.status, Weight_display: w.display === null ? '' : w.display, Unit: w.unit.replace('currency', proj.currency), Coefficient: w.coef, StdError: w.se === null ? '' : w.se, pValue: w.p === null ? '' : w.p, Confidence: w.significance.label, SampleCount: w.column.kind === 'category' ? w.count : '' });
+        rows.push({ Model: 'improvement', Form: fit.form, Term: w.column.label, Kind: w.column.kind, Status: w.status, Weight_display: w.display === null ? '' : w.display, Unit: w.unit.replace('currency', proj.currency), Coefficient: w.coef, StdError: w.se === null ? '' : w.se, pValue: w.p === null ? '' : w.p, Confidence: w.significance.label, SampleCount: w.column.kind === 'category' ? w.count : '' });
       });
-      rows.push({ Model: kind, Form: fit.form, Term: '[fit statistics]', Kind: '', Status: '', Weight_display: '', Unit: '', Coefficient: '', StdError: '', pValue: '', Confidence: 'n=' + fit.n + '; R2=' + fit.r2.toFixed(4) + '; adjR2=' + fit.adjR2.toFixed(4) + '; RMSE=' + Math.round(fit.rmse) + '; LOO_RMSE=' + (fit.loocvRmse === null ? 'NA' : Math.round(fit.loocvRmse)) + '; COD=' + fit.cod.toFixed(2) + '; PRD=' + fit.prd.toFixed(4) + '; smearing=' + fit.smearing.toFixed(4), SampleCount: '' });
-    });
+      rows.push({ Model: 'improvement', Form: fit.form, Term: '[fit statistics]', Confidence: 'n=' + fit.n + '; R2=' + fit.r2.toFixed(4) + '; adjR2=' + fit.adjR2.toFixed(4) + '; RMSE=' + Math.round(fit.rmse) + '; LOO_RMSE=' + (fit.loocvRmse === null ? 'NA' : Math.round(fit.loocvRmse)) + '; COD=' + fit.cod.toFixed(2) + '; PRD=' + fit.prd.toFixed(4) + '; smearing=' + fit.smearing.toFixed(4) });
+    }
     return { headers: ['Model', 'Form', 'Term', 'Kind', 'Status', 'Weight_display', 'Unit', 'Coefficient', 'StdError', 'pValue', 'Confidence', 'SampleCount'], rows: rows };
+  }
+
+  function ratesExportRows() {
+    var lr = state.project.landRates, isSector = lr.level === 'sector', entries = isSector ? lr.sectors : lr.areas;
+    var rows = Object.keys(entries).map(function (k) { var e = entries[k]; return { Level: lr.level, Key: k, Rate_per_m2: e.rate, WithUplift: numOrNull(e.rate) === null ? '' : Math.round(numOrNull(e.rate) * (numOrNull(lr.upliftFactor) || 1)), Plots2011: e.n || '', P25_2011: e.p25 || '', P75_2011: e.p75 || '', Source: e.source || '', Note: e.note || '' }; });
+    rows.push({ Level: lr.level, Key: '[settings]', Rate_per_m2: lr.defaultRate, WithUplift: '', Plots2011: '', P25_2011: '', P75_2011: '', Source: 'default rate; uplift factor ' + lr.upliftFactor, Note: '' });
+    return { headers: [isSector ? 'Sector' : 'Area', 'Rate_per_m2', 'WithUplift', 'Plots2011', 'P25_2011', 'P75_2011', 'Source', 'Note'], rows: rows.map(function (r) { var o = {}; o[isSector ? 'Sector' : 'Area'] = r.Key; ['Rate_per_m2', 'WithUplift', 'Plots2011', 'P25_2011', 'P75_2011', 'Source', 'Note'].forEach(function (h) { o[h] = r[h]; }); return o; }) };
   }
 
   function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
   function reportHtml() {
-    var proj = state.project;
-    var h = ['<!DOCTYPE html><html><head><meta charset="utf-8"><title>Valuation model report – ' + esc(proj.name) + '</title>',
-      '<style>body{font-family:system-ui,Arial,sans-serif;max-width:60rem;margin:2rem auto;color:#1f2933;font-size:14px}table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{border:1px solid #ccc;padding:.3rem .5rem;text-align:left}th{background:#f0f3f6}.num{text-align:right}.muted{color:#5f6b7a}.formula{font-family:monospace;background:#f0f3f6;padding:.4rem .6rem}</style></head><body>',
-      '<h1>Valuation model report</h1><p><strong>' + esc(proj.name) + '</strong> · ' + esc(proj.currency) + ' · basis: ' + (proj.valueBasis === 'capital' ? 'capital value' : 'annual rental value') + ' · generated ' + new Date().toLocaleString('en-GB') + '</p>',
-      '<p class="muted">Prepared with the Lilongwe Valuation Formula Builder. Under LGA 1998 s.67 and the Property Valuation Act 2024 the valuation must be designed, supervised and certified by a registered valuer; this report is a working document for that purpose.</p>'];
-    MODEL_KINDS.forEach(function (kind) {
-      var fit = proj.models[kind].fit;
-      h.push('<h2>' + MODEL_LABEL[kind] + '</h2>');
-      if (!fit || !fit.ok) { h.push('<p class="muted">Not fitted.</p>'); return; }
-      h.push('<p>' + esc(Formula.formDescription(fit.form)) + '</p><p class="formula">' + esc(Formula.formulaText(fit.form, AREA_LABEL[kind].replace(' (m²)', ''))) + '</p>');
+    var proj = state.project, fit = proj.model.fit, lr = proj.landRates;
+    var h = ['<!DOCTYPE html><html><head><meta charset="utf-8"><title>Valuation report – ' + esc(proj.name) + '</title>',
+      '<style>body{font-family:Helvetica,Arial,sans-serif;max-width:62rem;margin:2rem auto;color:#000;font-size:14px}h1,h2,h3{font-family:Raleway,Helvetica,Arial,sans-serif}h1{border-bottom:3px solid #e8a838;padding-bottom:6px}h2{color:#14472e;margin-top:26px}table{border-collapse:collapse;width:100%;margin:.6rem 0}th,td{border:1px solid #d5ddd5;padding:.3rem .5rem;text-align:left}th{background:#14472e;color:#fff;font-size:12px;text-transform:uppercase}.num{text-align:right}.muted{color:#4a5a4a}.box{background:#eaf2ea;border-radius:8px;padding:12px 16px;margin:12px 0}.cert{border:2px solid #14472e;border-radius:8px;padding:14px 18px;margin-top:26px}</style></head><body>',
+      '<h1>Valuation report</h1><p><b>' + esc(proj.name) + '</b> · Lilongwe City Council · ' + esc(proj.currency) + ' · basis: ' + (proj.valueBasis === 'annual_rental' ? 'estimated annual rental value' : 'capital (market) value') + ' · generated ' + new Date().toLocaleString('en-GB') + '</p>'];
+    h.push('<h2>Basis, method and assumptions (Property Valuation Act 2024, s.22)</h2><div class="box">' + Formula.methodStatement(proj, fit).map(function (s) { return '<p>' + esc(s) + '</p>'; }).join('') + '</div>');
+    h.push('<h2>Land value schedule</h2><p>Rates by ' + (lr.level === 'sector' ? 'Sector' : 'Area') + '; uplift factor ' + esc(lr.upliftFactor) + '; default rate ' + esc(Formula.fmtMoney(lr.defaultRate, proj.currency)) + ' per m².' + (lr.defaultsSource ? ' Starting rates: ' + esc(lr.defaultsSource) + '.' : '') + '</p>');
+    var entries = lr.level === 'sector' ? lr.sectors : lr.areas;
+    h.push('<table><tr><th>' + (lr.level === 'sector' ? 'Sector' : 'Area') + '</th><th class="num">Rate per m²</th><th class="num">With uplift</th><th class="num">Plots in 2011 roll</th><th>Source</th><th>Note</th></tr>');
+    Object.keys(entries).sort(function (a, b) { var pa = a.split('/').map(Number), pb = b.split('/').map(Number); return (pa[0] - pb[0]) || ((pa[1] || 0) - (pb[1] || 0)); }).forEach(function (k) { var e = entries[k]; h.push('<tr><td>' + esc(k) + '</td><td class="num">' + esc(fmt(e.rate, 0)) + '</td><td class="num">' + esc(fmt(numOrNull(e.rate) * (numOrNull(lr.upliftFactor) || 1), 0)) + '</td><td class="num">' + esc(e.n || '') + '</td><td>' + esc(e.source || '') + '</td><td>' + esc(e.note || '') + '</td></tr>'); });
+    h.push('</table>');
+    h.push('<h2>Building value model</h2>');
+    if (!fit || !fit.ok) h.push('<p class="muted">Not fitted.</p>');
+    else {
+      h.push('<p>' + esc(Formula.formDescription(fit.form)) + '</p><p><code>' + esc(Formula.formulaText(fit.form, 'Built area')) + '</code></p>');
       h.push('<table><tr>' + Formula.fitSummary(fit, proj.currency).map(function (s) { return '<th>' + esc(s.label) + '</th>'; }).join('') + '</tr><tr>' + Formula.fitSummary(fit, proj.currency).map(function (s) { return '<td class="num">' + esc(s.value) + '</td>'; }).join('') + '</tr></table>');
-      h.push('<table><tr><th>Term</th><th>n</th><th>Weight</th><th>Std. error</th><th>p-value</th><th>Confidence</th></tr>');
-      Formula.weightsTable(fit, proj.currency).forEach(function (w) {
-        if (w.status === 'excluded') return;
-        h.push('<tr><td>' + esc(w.column.label) + (w.column.isBase ? ' (base)' : '') + '</td><td class="num">' + (w.column.kind === 'category' ? w.count : '') + '</td><td class="num">' + esc(w.weightText) + '</td><td class="num">' + (w.se === null ? '–' : fmt(w.se, 4)) + '</td><td class="num">' + esc(Formula.fmtP(w.p)) + '</td><td>' + esc(w.significance.label) + '</td></tr>');
-      });
+      h.push('<table><tr><th>Term</th><th class="num">n</th><th class="num">Weight</th><th class="num">Std. error</th><th class="num">p-value</th><th>Confidence</th></tr>');
+      Formula.weightsTable(fit, proj.currency).forEach(function (w) { if (w.status === 'excluded') return; h.push('<tr><td>' + esc(w.column.label) + (w.column.isBase ? ' (base)' : '') + '</td><td class="num">' + (w.column.kind === 'category' ? w.count : '') + '</td><td class="num">' + esc(w.weightText) + '</td><td class="num">' + (w.se === null ? '–' : fmt(w.se, 4)) + '</td><td class="num">' + esc(Formula.fmtP(w.p)) + '</td><td>' + esc(w.significance.label) + '</td></tr>'); });
       h.push('</table>');
-      if (fit.warnings.length) h.push('<p><strong>Checks:</strong></p><ul>' + fit.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
-    });
-    var rows = rollRows();
-    var n = rows.filter(function (r) { return r.v.total !== null; }).length;
-    h.push('<h2>Application</h2><p>' + n + ' of ' + rows.length + ' properties receive a formula value. Land and improvement values are reported separately in the exported roll (LGA s.68(1)).</p>');
+      if (fit.warnings.length) h.push('<p><b>Checks:</b></p><ul>' + fit.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
+    }
+    var rows = rollRows(); var n = rows.filter(function (r) { return r.v.total !== null; }).length;
+    h.push('<h2>Application</h2><p>' + n + ' of ' + rows.length + ' properties receive a formula value. Land, improvement and total values are reported separately in the exported roll (Local Government Act s.68(1)). Each property has a calculation sheet that shows every step.</p>');
     var cond = proj.features.filter(function (f) { return f.isCondition; });
-    if (cond.length) h.push('<p><strong>Legal flag:</strong> condition variables in the model: ' + esc(cond.map(function (f) { return f.name; }).join(', ')) + '. Whether actual condition is a permitted input under the "reasonable condition" wording of the LGA is unresolved.</p>');
+    if (cond.length) h.push('<p><b>Legal flag:</b> condition variables in the model: ' + esc(cond.map(function (f) { return f.name; }).join(', ')) + '. Whether actual condition is a permitted input under the "reasonable condition" wording of the Local Government Act is unresolved.</p>');
+    h.push('<p class="muted">Regulations under PVA 2024 s.42(2)(c) for mass valuation procedures were not confirmed as issued at the time of preparation. This report is a working document for the registered valuer\'s review.</p>');
+    var v = proj.valuer || {};
+    h.push('<div class="cert"><h3>Certification (PVA 2024 ss.24–25)</h3><p>Registered valuer: <b>' + esc(v.name || '______________________') + '</b> · Registration / licence no.: <b>' + esc(v.registration || '____________') + '</b></p><p>Valuation date: <b>' + esc(v.valuationDate || '____________') + '</b> · Validity: <b>' + esc(v.validityMonths || '__') + ' months</b> from the valuation date</p><p>Stamp, address, date and signature: ____________________________________________</p></div>');
     h.push('</body></html>');
     return h.join('\n');
   }
@@ -711,27 +810,31 @@
     var proj = state.project;
     var box = $('#sheet-content');
     box.innerHTML = '';
-    box.className = 'sheet';
     box.appendChild(el('h3', { text: 'Calculation sheet – ' + (p.plotNo || '') + (p.description ? ' · ' + p.description : '') }));
-    box.appendChild(el('p', { class: 'muted small', text: 'Zone: ' + (p.zone || '–') + ' · Land area: ' + fmt(p.landArea_m2, 1) + ' m² (' + (p.landAreaSource || 'not set') + ') · Built area: ' + fmt(p.builtArea_m2, 1) + ' m² (' + (p.builtAreaSource || 'not set') + ') · Basis: ' + (proj.valueBasis === 'capital' ? 'capital value' : 'annual rental value') }));
-    var total = 0, any = false;
-    MODEL_KINDS.forEach(function (kind) {
-      var m = modelForPrediction(kind);
-      box.appendChild(el('h4', { text: MODEL_LABEL[kind] }));
-      if (!m) { box.appendChild(el('p', { class: 'muted', text: 'Model not fitted.' })); return; }
-      var sheet = Formula.calculationSheet(m, modelRow(kind, p), proj.currency, AREA_LABEL[kind].replace(' (m²)', ''));
-      if (!sheet.ok) { box.appendChild(el('p', { class: 'muted', text: 'Cannot value: ' + sheet.notes.join('; ') })); return; }
-      var t = el('table', { class: 'compact' });
+    box.appendChild(el('p', { class: 'help', text: (areaText(p) || 'Area not set') + ' · Land area: ' + fmt(p.landArea_m2, 1) + ' m² (' + (p.landAreaSource || 'not set') + ') · Built area: ' + fmt(p.builtArea_m2, 1) + ' m² (' + (p.builtAreaSource || 'not set') + ') · Basis: ' + (proj.valueBasis === 'annual_rental' ? 'annual rental value' : 'capital value') }));
+    function table(sheet, totalLabel) {
+      var t = el('table', { class: 'data compact' });
       t.appendChild(el('thead', null, [el('tr', null, ['Step', 'Detail', 'Amount / factor'].map(function (h) { return el('th', { text: h }); }))]));
       var tb = el('tbody');
       sheet.lines.forEach(function (l) { tb.appendChild(el('tr', null, [el('td', { text: l.label }), el('td', { text: l.detail }), el('td', { class: 'num', text: l.factorText })])); });
-      tb.appendChild(el('tr', { class: 'total' }, [el('td', { text: kind === 'land' ? 'Land value' : 'Improvement value' }), el('td', { text: Formula.formulaText(m.form, AREA_LABEL[kind].replace(' (m²)', '')) }), el('td', { class: 'num', text: sheet.valueText })]));
+      tb.appendChild(el('tr', { class: 'total' }, [el('td', { text: totalLabel }), el('td', { text: '' }), el('td', { class: 'num', text: sheet.valueText })]));
       t.appendChild(tb);
-      box.appendChild(t);
-      sheet.notes.forEach(function (n) { box.appendChild(el('p', { class: 'muted small', text: n })); });
-      total += sheet.value; any = true;
-    });
-    if (any) box.appendChild(el('p', null, [el('strong', { text: 'Total value (land + improvements): ' + money(total) })]));
+      return t;
+    }
+    var total = 0, any = false;
+    box.appendChild(el('h3', { text: '1. Land value = rate × parcel area' }));
+    var ls = Formula.landSheet(Valuation.landValueFor(proj, p), proj.currency);
+    if (!ls.ok) box.appendChild(el('p', { class: 'help', text: 'Cannot value land: ' + ls.notes.join('; ') })); else { box.appendChild(table(ls, 'Land value')); total += ls.value; any = true; }
+    ls.notes.forEach(function (n) { if (ls.ok) box.appendChild(el('p', { class: 'help', text: n })); });
+    box.appendChild(el('h3', { text: '2. Building value = ' + (modelForPrediction() ? Formula.formulaText(modelForPrediction().form, 'built area').replace('Value = ', '') : 'formula') }));
+    var m = modelForPrediction();
+    if (!m) box.appendChild(el('p', { class: 'help', text: 'Model not fitted.' }));
+    else {
+      var sheet = Formula.calculationSheet(m, { area: p.builtArea_m2, chars: charsFor(p) }, proj.currency, 'Built area');
+      if (!sheet.ok) box.appendChild(el('p', { class: 'help', text: 'Cannot value buildings: ' + sheet.notes.join('; ') }));
+      else { box.appendChild(table(sheet, 'Building value')); sheet.notes.forEach(function (n) { box.appendChild(el('p', { class: 'help', text: n })); }); total += sheet.value; any = true; }
+    }
+    if (any) box.appendChild(el('p', { class: 'grand', text: 'Total value (land + buildings): ' + money(total) }));
     $('#sheet-dialog').showModal();
   }
 
@@ -760,12 +863,10 @@
         var existing = state.project.features.find(function (f) { return f.name.toLowerCase() === h.toLowerCase(); });
         var typeSel = el('select', null, ['categorical', 'boolean', 'numeric'].map(function (t) { return el('option', { value: t, text: t }); }));
         typeSel.value = existing ? existing.type : type;
-        var applySel = el('select', null, [['improvement', 'Improvement'], ['land', 'Land'], ['both', 'Both']].map(function (a) { return el('option', { value: a[0], text: a[1] }); }));
-        if (existing) applySel.value = existing.appliesTo;
         et.appendChild(el('tr', { 'data-header': h }, [
-          el('td', null, [el('input', { type: 'checkbox', class: 'extra-check' })]),
+          el('td', null, [el('input', { type: 'checkbox', class: 'extra-check', checked: true })]),
           el('td', { text: h + (existing ? ' (matches existing characteristic)' : '') }),
-          el('td', null, [typeSel]), el('td', null, [applySel])
+          el('td', null, [typeSel])
         ]));
       });
     }
@@ -781,19 +882,20 @@
     var extras = [];
     $all('#import-extras tbody tr').forEach(function (tr) {
       if (!$('.extra-check', tr).checked) return;
-      var sels = $all('select', tr);
-      extras.push({ header: tr.getAttribute('data-header'), type: sels[0].value, appliesTo: sels[1].value });
+      extras.push({ header: tr.getAttribute('data-header'), type: $('select', tr).value });
     });
     var res = IO.applyMapping(parsed, mapping, extras, state.project.features);
     res.features.forEach(addFeature);
     if ($('#import-replace').checked) state.project.properties = [];
     state.project.properties = state.project.properties.concat(res.properties);
+    var located = 0;
+    res.properties.forEach(function (p) { if (p.locationSource !== 'imported' && locateProperty(p, false)) located++; });
     state.pendingImport = null;
     state.selectedId = null;
     markDirty(true);
     renderAll();
     Mapping.fitAll(state.project.properties);
-    toast('Imported ' + res.properties.length + ' properties' + (res.features.length ? ' and ' + res.features.length + ' characteristics' : '') + '.' + (res.warnings.length ? ' ' + res.warnings.length + ' warning(s): ' + res.warnings.slice(0, 3).join('; ') : ''));
+    toast('Imported ' + res.properties.length + ' properties' + (res.features.length ? ' and ' + res.features.length + ' characteristics' : '') + (located ? '; ' + located + ' assigned to an Area' : '') + '.' + (res.warnings.length ? ' ' + res.warnings.length + ' warning(s): ' + res.warnings.slice(0, 3).join('; ') : ''));
   }
 
   /* ------------------------------------------------------------------ */
@@ -801,34 +903,61 @@
   /* ------------------------------------------------------------------ */
 
   function renderHeader() {
-    $('#project-name').value = state.project.name || '';
-    $('#currency').value = state.project.currency || 'MWK';
-    $('#value-basis').value = state.project.valueBasis || 'annual_rental';
+    var proj = state.project;
+    document.body.classList.toggle('mode-simple', !isAdvanced());
+    document.body.classList.toggle('mode-advanced', isAdvanced());
+    $all('#mode-toggle button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-mode') === proj.mode); });
+    Mapping.showSectors(isAdvanced() && proj.landRates.level === 'sector');
+    $('#project-name').value = proj.name || '';
+    $('#currency').value = proj.currency || 'MWK';
+    $('#valuer-name').value = proj.valuer.name || '';
+    $('#valuer-registration').value = proj.valuer.registration || '';
+    $('#valuation-date').value = proj.valuer.valuationDate || '';
+    $('#validity-months').value = proj.valuer.validityMonths || 12;
+    var tabBtn = $('.tabs button[data-tab="' + state.currentTab + '"]');
+    if (tabBtn && tabBtn.hasAttribute('data-advanced') && !isAdvanced()) showTab('properties');
   }
 
   function renderAll() {
-    renderHeader(); renderProperties(); renderDetail(); renderFeatures(); renderModels(); renderRoll();
+    renderHeader(); renderProperties(); renderDetail(); renderRates(); renderFeatures(); renderModel(); renderResults();
     Mapping.render(state.project.properties, selected());
   }
 
   function showTab(name) {
-    $all('.tabs button').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === name); });
-    $all('.tab').forEach(function (t) { t.classList.toggle('active', t.id === 'tab-' + name); });
+    state.currentTab = name;
+    $all('.tabs button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-tab') === name); });
+    $all('.tab').forEach(function (t) { t.classList.toggle('on', t.id === 'tab-' + name); });
     if (name === 'properties') Mapping.invalidate();
-    if (name === 'roll') renderRoll();
-    if (name === 'models') renderModels();
+    if (name === 'results') { if (!state.project.model.fit) fitModel(true); else renderResults(); }
+    if (name === 'model') renderModel();
     if (name === 'features') renderFeatures();
+    if (name === 'rates') renderRates();
+  }
+
+  function setMode(mode) {
+    state.project.mode = mode;
+    save();
+    renderHeader(); renderDetail();
+    if (mode === 'advanced' && !state.project.model.fit) fitModel(true);
   }
 
   function wire() {
     $all('.tabs button').forEach(function (b) { b.addEventListener('click', function () { showTab(b.getAttribute('data-tab')); }); });
-    $('#project-name').addEventListener('change', function (e) { state.project.name = e.target.value; markDirty(false); });
-    $('#currency').addEventListener('change', function (e) { state.project.currency = e.target.value || 'MWK'; markDirty(false); renderModels(); renderRoll(); });
-    $('#value-basis').addEventListener('change', function (e) { state.project.valueBasis = e.target.value; markDirty(false); });
+    $all('#mode-toggle button').forEach(function (b) { b.addEventListener('click', function () { setMode(b.getAttribute('data-mode')); }); });
+    $('#project-name').addEventListener('change', function (e) { state.project.name = e.target.value; save(); });
+    $('#currency').addEventListener('change', function (e) { state.project.currency = e.target.value || 'MWK'; save(); renderModel(); renderResults(); renderRates(); });
+    $('#value-basis').addEventListener('change', function (e) { state.project.valueBasis = e.target.value; save(); renderDetail(); });
+    ['valuer-name', 'valuer-registration', 'valuation-date', 'validity-months'].forEach(function (id) {
+      $('#' + id).addEventListener('change', function (e) {
+        var v = state.project.valuer;
+        if (id === 'valuer-name') v.name = e.target.value; else if (id === 'valuer-registration') v.registration = e.target.value; else if (id === 'valuation-date') v.valuationDate = e.target.value; else v.validityMonths = numOrNull(e.target.value) || 12;
+        save();
+      });
+    });
 
     $('#btn-new').addEventListener('click', function () {
       if (!confirm('Start a new empty project? Unsaved work in the current project will be lost (save it first if needed).')) return;
-      Storage.clearProject().then(function () { state.project = newProject(); state.selectedId = null; renderAll(); markDirty(false); toast('New project started.'); });
+      Storage.clearProject().then(function () { state.project = newProject(); state.selectedId = null; renderAll(); save(); toast('New project started.'); });
     });
     $('#btn-save').addEventListener('click', function () {
       Storage.exportProjectFile(state.project).then(function (json) {
@@ -839,7 +968,7 @@
     $('#btn-open').addEventListener('click', function () { $('#file-open').click(); });
     $('#file-open').addEventListener('change', function (e) {
       var f = e.target.files[0]; if (!f) return;
-      f.text().then(Storage.importProjectFile).then(function (p) { state.project = upgradeProject(p); state.selectedId = null; renderAll(); markDirty(false); toast('Project loaded: ' + p.properties.length + ' properties.'); })
+      f.text().then(Storage.importProjectFile).then(function (p) { state.project = upgradeProject(p); state.selectedId = null; renderAll(); save(); toast('Project loaded: ' + p.properties.length + ' properties.'); })
         .catch(function (err) { toast('Could not open project: ' + err.message, true); });
       e.target.value = '';
     });
@@ -855,7 +984,7 @@
 
     $('#btn-add-property').addEventListener('click', function () {
       var p = newProperty(); p.plotNo = 'NEW-' + (state.project.properties.length + 1);
-      state.project.properties.push(p); markDirty(false); renderProperties(); selectProperty(p.id); showTab('properties');
+      state.project.properties.push(p); save(); renderProperties(); selectProperty(p.id); showTab('properties');
     });
     $('#btn-delete-property').addEventListener('click', function () {
       var p = selected(); if (!p) { toast('Select a property first.', true); return; }
@@ -864,47 +993,59 @@
       state.project.properties = state.project.properties.filter(function (x) { return x.id !== p.id; });
       state.selectedId = null; markDirty(true); renderProperties(); renderDetail(); Mapping.render(state.project.properties, null);
     });
+    $('#btn-locate-all').addEventListener('click', function () {
+      var n = locateAll(false);
+      markDirty(true); renderProperties(); renderDetail(); renderRates();
+      var unset = state.project.properties.filter(function (p) { return p.areaId === null; }).length;
+      toast(n + ' properties assigned or updated' + (unset ? '; ' + unset + ' still without an Area (no position and no recognisable plot number)' : '') + '.');
+    });
     $('#btn-fit-map').addEventListener('click', function () { Mapping.fitAll(state.project.properties); });
     $('#property-search').addEventListener('input', function (e) { state.filter = e.target.value; renderProperties(); });
-
-    $('#btn-split-totals').addEventListener('click', function () { $('#split-dialog').showModal(); });
-    $('#split-cancel').addEventListener('click', function () { $('#split-dialog').close(); });
-    $('#split-confirm').addEventListener('click', function (e) {
-      e.preventDefault(); $('#split-dialog').close();
-      var share = numOrNull($('#split-share').value); if (share === null || share < 0 || share > 100) { toast('Enter a land share between 0 and 100.', true); return; }
-      var n = 0;
-      state.project.properties.forEach(function (p) {
-        if (numOrNull(p.totalValueEntered) === null || numOrNull(p.landValue) !== null || numOrNull(p.improvementValue) !== null) return;
-        p.landValue = Math.round(p.totalValueEntered * share / 100); p.improvementValue = Math.round(p.totalValueEntered * (100 - share) / 100);
-        p.notes = (p.notes ? p.notes + ' ' : '') + '[Land/improvement split from entered total at ' + share + '% land share on ' + new Date().toISOString().slice(0, 10) + '.]';
-        n++;
-      });
-      markDirty(true); renderProperties(); renderDetail();
-      toast(n + ' properties split at ' + share + '% land share.');
-    });
 
     $('#tool-pin').addEventListener('click', function () { armTool('pin', '#tool-pin'); });
     $('#tool-roof').addEventListener('click', function () { armTool('roof', '#tool-roof'); });
     $('#tool-parcel').addEventListener('click', function () { armTool('parcel', '#tool-parcel'); });
-    $('#tool-cancel').addEventListener('click', function () { Mapping.cancelTool(); $all('.map-tools button').forEach(function (b) { b.classList.remove('armed'); }); });
+    $('#tool-cancel').addEventListener('click', function () { Mapping.cancelTool(); disarm(); });
     $('#tool-locate').addEventListener('click', function () {
       if (!requireSelected()) return;
       Mapping.locateDevice().then(function (pos) { onPin(pos.lat, pos.lng); Mapping.focus(selected()); toast('Location set (±' + Math.round(pos.accuracy) + ' m).'); })
         .catch(function (err) { toast(err.message, true); });
     });
 
+    // land rates
+    $all('#rate-level-toggle button').forEach(function (b) { b.addEventListener('click', function () { state.project.landRates.level = b.getAttribute('data-level'); markDirty(true); renderRates(); renderHeader(); }); });
+    $('#rate-uplift').addEventListener('change', function (e) { var v = numOrNull(e.target.value); if (v === null || v < 0) { toast('Enter an uplift factor of 0 or more.', true); return; } state.project.landRates.upliftFactor = v; markDirty(true); renderRates(); });
+    $('#rate-default').addEventListener('change', function (e) { var v = numOrNull(e.target.value); if (v === null || v < 0) { toast('Enter a default rate of 0 or more.', true); return; } state.project.landRates.defaultRate = v; markDirty(true); renderRates(); });
+    $('#btn-rates-reset').addEventListener('click', function () {
+      if (!window.LAND_RATES_DEFAULT) { toast('Default rates are not available.', true); return; }
+      if (!confirm('Replace all rates with the 2011 roll medians? Edited rates are lost; the uplift factor is kept.')) return;
+      var keep = state.project.landRates;
+      var fresh = Valuation.defaultSchedule(window.LAND_RATES_DEFAULT);
+      fresh.level = keep.level; fresh.upliftFactor = keep.upliftFactor;
+      state.project.landRates = fresh; markDirty(true); renderRates(); toast('Rates reset to the 2011 roll medians.');
+    });
+    $('#btn-rates-export').addEventListener('click', function () { var r = ratesExportRows(); IO.downloadTable('land_rates_' + state.project.landRates.level + '.csv', r.rows, r.headers, 'csv'); });
+    $('#btn-rates-import').addEventListener('click', function () { $('#file-rates').click(); });
+    $('#file-rates').addEventListener('change', function (e) {
+      var f = e.target.files[0]; if (!f) return;
+      IO.readFile(f).then(function (parsed) {
+        var res = IO.parseRates(parsed);
+        var lr = state.project.landRates;
+        var target = res.level === 'sector' ? lr.sectors : lr.areas;
+        var n = 0;
+        Object.keys(res.entries).forEach(function (k) { if (k === '[settings]') return; target[k] = Object.assign({ n: null, p25: null, p75: null }, target[k] || {}, res.entries[k]); n++; });
+        lr.level = res.level;
+        markDirty(true); renderRates(); renderHeader();
+        toast(n + ' ' + res.level + ' rates imported' + (res.skipped ? ' (' + res.skipped + ' rows skipped)' : '') + '.');
+      }).catch(function (err) { toast('Could not import rates: ' + err.message, true); });
+      e.target.value = '';
+    });
+
+    // features
     $('#btn-add-feature').addEventListener('click', function () {
       var name = prompt('Name of the characteristic (e.g. Wall material):'); if (!name) return;
-      addFeature({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'feature', name: name.trim(), type: 'categorical', appliesTo: 'improvement', categories: [], baseCategory: null, isCondition: false });
+      addFeature({ id: name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'feature', name: name.trim(), type: 'categorical', categories: [], baseCategory: null, isCondition: false });
       markDirty(false); renderFeatures();
-    });
-    $('#btn-zone-feature').addEventListener('click', function () {
-      if (state.project.features.some(function (f) { return f.source === 'zone'; })) { toast('The Zone field is already used as a characteristic.', true); return; }
-      var cats = zoneCategories();
-      if (!cats.length) { toast('No property has a Zone value yet.', true); return; }
-      addFeature({ id: 'zone', name: 'Zone', type: 'categorical', appliesTo: 'land', categories: cats, baseCategory: null, isCondition: false, source: 'zone' });
-      markDirty(true); renderFeatures();
-      toast('Zone added as a land characteristic with ' + cats.length + ' categories. Merge zones with similar values into fewer categories if the sample is small.');
     });
     $('#btn-suggest-features').addEventListener('click', function () {
       var added = 0;
@@ -915,14 +1056,21 @@
       markDirty(false); renderFeatures();
       toast(added + ' suggested characteristics added. Adapt names and categories to Lilongwe before use.');
     });
+    $('#btn-landuse-feature').addEventListener('click', function () {
+      if (state.project.features.some(function (f) { return f.source === 'landuse'; })) { toast('Sector land use is already a characteristic.', true); return; }
+      addFeature({ id: 'sector_land_use', name: 'Sector land use (planning)', type: 'categorical', categories: landUseCategories(), baseCategory: null, isCondition: false, source: 'landuse' });
+      markDirty(true); renderFeatures();
+      toast('Sector land use added as a characteristic. Properties need an Area/Sector for it to apply.');
+    });
 
+    // results
     $('#btn-export-roll-csv').addEventListener('click', function () { var r = rollExportRows(); IO.downloadTable('valuation_roll.csv', r.rows, r.headers, 'csv'); });
     $('#btn-export-roll-xlsx').addEventListener('click', function () {
-      var r = rollExportRows(), w = weightsExportRows();
-      IO.downloadWorkbook('valuation_roll.xlsx', [{ name: 'Valuation roll', rows: r.rows, headers: r.headers }, { name: 'Weights', rows: w.rows, headers: w.headers }]);
+      var r = rollExportRows(), w = weightsExportRows(), lr = ratesExportRows();
+      IO.downloadWorkbook('valuation_roll.xlsx', [{ name: 'Valuation roll', rows: r.rows, headers: r.headers }, { name: 'Land rates', rows: lr.rows, headers: lr.headers }, { name: 'Weights', rows: w.rows, headers: w.headers }]);
     });
-    $('#btn-export-weights').addEventListener('click', function () { var w = weightsExportRows(); if (!w.rows.length) { toast('Fit a model first.', true); return; } IO.downloadTable('valuation_weights.csv', w.rows, w.headers, 'csv'); });
-    $('#btn-export-report').addEventListener('click', function () { Storage.downloadText('valuation_model_report.html', reportHtml(), 'text/html'); });
+    $('#btn-export-weights').addEventListener('click', function () { var w = weightsExportRows(); if (!w.rows.length) { toast('Fit the model first.', true); return; } IO.downloadTable('valuation_weights.csv', w.rows, w.headers, 'csv'); });
+    $('#btn-export-report').addEventListener('click', function () { Storage.downloadText('valuation_report.html', reportHtml(), 'text/html'); });
 
     $('#sheet-close').addEventListener('click', function () { $('#sheet-dialog').close(); });
     $('#sheet-print').addEventListener('click', function () { window.print(); });
@@ -938,7 +1086,6 @@
     }).catch(function () { state.project = newProject(); renderAll(); });
   }
 
-  // expose a little for tests and debugging
-  window.App = { state: state, fitModel: fitModel, valueProperty: valueProperty, rollExportRows: rollExportRows, weightsExportRows: weightsExportRows, showTab: showTab, renderAll: renderAll };
+  window.App = { state: state, fitModel: fitModel, valueOf: valueOf, rollExportRows: rollExportRows, weightsExportRows: weightsExportRows, ratesExportRows: ratesExportRows, showTab: showTab, setMode: setMode, renderAll: renderAll, locateAll: locateAll };
   document.addEventListener('DOMContentLoaded', init);
 }());
