@@ -114,6 +114,51 @@
     return out;
   }
 
+  /*
+   * Compare several fitted models on the same properties. entries[0] is the
+   * reference (normally the current model). Each entry: { id, name, fit }.
+   * Returns { entries: [{ id, name, form, stats, terms, locks, totals, compared, moved, movedShare }],
+   *           perProperty: [{ id, plotNo, land, values, totals }] }
+   */
+  function compareModels(project, entries, charsFor, threshold) {
+    threshold = threshold || 0.10;
+    var props = project.properties || [];
+    var out = {
+      entries: entries.map(function (e) {
+        var f = e.fit && e.fit.ok ? e.fit : null;
+        return {
+          id: e.id, name: e.name, form: f ? f.form : (e.fit ? e.fit.form : null),
+          stats: f ? { n: f.n, r2: f.r2, adjR2: f.adjR2, rmse: f.rmse, loocvRmse: f.loocvRmse, cod: f.cod, prd: f.prd, medianRatio: f.medianRatio } : null,
+          terms: f ? f.status.filter(function (s) { return s === 'free' || s === 'locked'; }).length : 0,
+          locks: f ? f.status.filter(function (s) { return s === 'locked'; }).length : 0,
+          totals: { land: 0, improvement: 0, total: 0, valued: 0 }, compared: 0, moved: 0, movedShare: null
+        };
+      }),
+      perProperty: []
+    };
+    var models = entries.map(function (e) { var f = e.fit && e.fit.ok ? e.fit : null; return f ? { form: f.form, columns: f.columns, coef: f.coef, smearing: f.smearing } : null; });
+    props.forEach(function (p) {
+      var lv = landValueFor(project, p).value;
+      var chars = charsFor ? charsFor(p) : (p.characteristics || {});
+      var row = { id: p.id, plotNo: p.plotNo, description: p.description, areaId: p.areaId, land: lv, values: [], totals: [] };
+      models.forEach(function (m, k) {
+        var imp = null;
+        if (m && num(p.builtArea_m2) !== null) { var pr = Engine.predict(m, { area: p.builtArea_m2, chars: chars }); if (!pr.invalid) imp = pr.value; }
+        var tot = (lv !== null || imp !== null) ? (lv || 0) + (imp || 0) : null;
+        row.values.push(imp); row.totals.push(tot);
+        if (tot !== null) { var t = out.entries[k].totals; t.land += lv || 0; t.improvement += imp || 0; t.total += tot; t.valued++; }
+      });
+      var ref = row.totals[0];
+      for (var k = 1; k < models.length; k++) {
+        var t2 = row.totals[k];
+        if (ref !== null && ref > 0 && t2 !== null) { out.entries[k].compared++; if (Math.abs(t2 - ref) / ref > threshold) out.entries[k].moved++; }
+      }
+      out.perProperty.push(row);
+    });
+    out.entries.forEach(function (e, k) { if (k > 0 && e.compared) e.movedShare = e.moved / e.compared; if (k === 0) e.movedShare = 0; });
+    return out;
+  }
+
   /* Migrate a version-1 project (two values, two models) to version 2 */
   function migrateProject(p, defaults) {
     if (!p) return p;
@@ -136,10 +181,11 @@
       if (x.landRateOverride === undefined) x.landRateOverride = null;
     });
     if (!p.mode) p.mode = 'simple';
+    if (!Array.isArray(p.savedModels)) p.savedModels = [];
     if (!p.valuer) p.valuer = { name: '', registration: '', valuationDate: '', validityMonths: 12 };
     p.version = 2;
     return p;
   }
 
-  return { defaultSchedule: defaultSchedule, landRateFor: landRateFor, landValueFor: landValueFor, modelFeatures: modelFeatures, modelRows: modelRows, valueProperty: valueProperty, migrateProject: migrateProject, LAND_SHARE_WARN: LAND_SHARE_WARN };
+  return { defaultSchedule: defaultSchedule, landRateFor: landRateFor, landValueFor: landValueFor, modelFeatures: modelFeatures, modelRows: modelRows, valueProperty: valueProperty, compareModels: compareModels, migrateProject: migrateProject, LAND_SHARE_WARN: LAND_SHARE_WARN };
 }));

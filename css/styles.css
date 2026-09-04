@@ -191,6 +191,10 @@ dialog h3 { margin-top: 0; }
 .dialog-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 @media (max-width: 800px) { .dialog-columns { grid-template-columns: 1fr; } }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.compare-weights td:first-child, .compare-weights th:first-child { position: sticky; left: 0; background: var(--paper); z-index: 2; min-width: 200px; }
+.compare-weights th:first-child { background: var(--green); z-index: 3; }
+.compare-weights td .badge { margin-left: 6px; }
+table.data tbody tr.active-model td { background: #fffaf0; box-shadow: inset 4px 0 0 var(--gold); font-weight: 700; }
 .sheet table.data { margin: 6px 0 10px; }
 .sheet tr.total td { font-weight: 700; border-top: 2px solid var(--green); background: var(--mint); }
 .sheet .grand { font-family: var(--font-head); font-weight: 700; font-size: 20px; color: var(--green); margin-top: 10px; }

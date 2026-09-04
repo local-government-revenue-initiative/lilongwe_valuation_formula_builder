@@ -25,7 +25,7 @@
     return {
       version: PROJECT_VERSION, name: 'Council estates pilot', currency: 'MWK', valueBasis: 'capital', mode: 'simple',
       valuer: { name: '', registration: '', valuationDate: '', validityMonths: 12 },
-      features: [], properties: [], landRates: Valuation.defaultSchedule(window.LAND_RATES_DEFAULT || null), model: newModelSpec(),
+      features: [], properties: [], landRates: Valuation.defaultSchedule(window.LAND_RATES_DEFAULT || null), model: newModelSpec(), savedModels: [],
       createdAt: new Date().toISOString()
     };
   }
@@ -580,16 +580,18 @@
     var formSel = el('select', { id: 'form-select', onchange: function (e) {
       spec.form = e.target.value;
       Object.keys(spec.locks).forEach(function (k) { if (k === 'area' || k === 'intercept' || (k.indexOf('f:') === 0 && proj.features.some(function (f) { return f.type === 'numeric' && k === 'f:' + f.id; }))) delete spec.locks[k]; });
-      fitModel(true);
+      specChanged();
     } }, [['loglinear', 'Log-linear (default)'], ['loglog', 'Log-log (LoGRI guidance)'], ['linear', 'Linear']].map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
     formSel.value = spec.form;
-    var smear = el('input', { type: 'checkbox', checked: !!spec.smearing, disabled: spec.form === 'linear', onchange: function (e) { spec.smearing = e.target.checked; fitModel(true); } });
+    var smear = el('input', { type: 'checkbox', checked: !!spec.smearing, disabled: spec.form === 'linear', onchange: function (e) { spec.smearing = e.target.checked; specChanged(); } });
     card.appendChild(el('div', { class: 'toolbar' }, [
       el('label', null, ['Model form ', formSel]),
       el('label', { class: 'check', title: 'Duan smearing corrects the downward bias of exponentiated log predictions. Off by default, as in the LoGRI guidance note.' }, [smear, ' Bias correction (smearing)']),
       el('button', { type: 'button', class: 'btn primary', id: 'fit-model', text: 'Fit / refit', onclick: function () { fitModel(false); } }),
-      el('button', { type: 'button', class: 'btn', id: 'compare-forms', text: 'Compare forms', onclick: function () { renderCompare(card); } })
+      el('button', { type: 'button', class: 'btn', id: 'compare-forms', text: 'Compare forms', onclick: function () { renderCompare(card); } }),
+      el('button', { type: 'button', class: 'btn', id: 'btn-save-model', text: 'Save current model as…', onclick: function () { saveCurrentModel(); } })
     ]));
+    if (spec.sourceName) card.appendChild(el('p', { class: 'help' }, [el('span', { class: 'tag teal', text: 'active: ' + spec.sourceName })]));
     card.appendChild(el('p', { class: 'help', text: Formula.formDescription(spec.form) }));
 
     var fit = spec.fit;
@@ -619,6 +621,122 @@
     st.appendChild(stb);
     card.appendChild(el('details', { class: 'drawer' }, [el('summary', { text: 'Sample properties: actual vs predicted building value' }), el('div', { class: 'drawer-body table-scroll' }, [st])]));
     card.appendChild(el('div', { id: 'compare-box' }));
+    renderComparison(card);
+  }
+
+  /* ---- saved models and their comparison ---- */
+
+  function specChanged() { state.project.model.sourceName = null; fitModel(true); }
+
+  function snapshotSpec(spec) { return JSON.parse(JSON.stringify({ form: spec.form, smearing: !!spec.smearing, included: spec.included || {}, locks: spec.locks || {}, bases: spec.bases || {} })); }
+
+  function saveCurrentModel(name) {
+    var proj = state.project;
+    if (!proj.model.fit || !proj.model.fit.ok) { toast('Fit the model before saving it.', true); return null; }
+    name = name || prompt('Name for this model:', 'Model ' + (proj.savedModels.length + 1));
+    if (!name) return null;
+    var entry = { id: 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: name.trim(), note: '', createdAt: new Date().toISOString(), spec: snapshotSpec(proj.model), fit: JSON.parse(JSON.stringify(proj.model.fit)) };
+    proj.savedModels.push(entry);
+    proj.model.sourceName = entry.name;
+    save(); renderModel(); renderResults();
+    toast('Saved "' + entry.name + '".');
+    return entry;
+  }
+
+  function refitSaved(entry) {
+    var proj = state.project, keep = snapshotSpec(proj.model), keepName = proj.model.sourceName;
+    Object.assign(proj.model, entry.spec);
+    var s = buildSpec();
+    var fit = Engine.fit(s, s.rows);
+    fit.residualIssues = s.prep.issues; fit.warnings = (s.prep.warnings || []).concat(fit.warnings || []);
+    entry.fit = JSON.parse(JSON.stringify(fit)); entry.refittedAt = new Date().toISOString();
+    Object.assign(proj.model, keep); proj.model.sourceName = keepName;
+  }
+
+  function useSaved(entry) {
+    var proj = state.project;
+    Object.assign(proj.model, snapshotSpec(entry.spec));
+    proj.model.sourceName = entry.name;
+    fitModel(true);
+    toast('"' + entry.name + '" is now the active model.');
+  }
+
+  function comparisonEntries() {
+    var proj = state.project;
+    var cur = { id: 'current', name: proj.model.sourceName ? 'Current (' + proj.model.sourceName + ')' : 'Current settings', fit: proj.model.fit };
+    return [cur].concat(proj.savedModels.map(function (m) { return { id: m.id, name: m.name, fit: m.fit, saved: m }; }));
+  }
+
+  function renderComparison(card) {
+    var proj = state.project;
+    var box = el('div', { id: 'saved-models' });
+    card.appendChild(box);
+    box.appendChild(el('h3', { text: 'Saved models and comparison' }));
+    if (!proj.savedModels.length) { box.appendChild(el('p', { class: 'help', text: 'Save the current model under a name, change the settings, save again, and the models are compared here on fit, weights and their effect on the valuation roll.' })); return; }
+    var entries = comparisonEntries();
+    var cmp = Valuation.compareModels(proj, entries, charsFor);
+    box.appendChild(el('div', { class: 'toolbar' }, [
+      el('button', { type: 'button', class: 'btn small', id: 'btn-refit-saved', text: 'Refit saved models on current data', onclick: function () { proj.savedModels.forEach(refitSaved); save(); renderModel(); toast('Saved models refitted.'); } }),
+      el('button', { type: 'button', class: 'btn small', id: 'btn-export-comparison', text: 'Export comparison (Excel)', onclick: exportComparison }),
+      el('span', { class: 'help', text: 'Land values are the same under every model; only the building formula differs.' })
+    ]));
+    // statistics table
+    var t = el('table', { class: 'data compact', id: 'compare-stats' });
+    t.appendChild(el('thead', null, [el('tr', null, ['Model', 'Form', 'Terms', 'Locks', 'n', 'R²', 'Adj. R²', 'RMSE', 'LOO RMSE', 'COD', 'PRD', 'Buildings total', 'All total', 'Moved > 10 %', ''].map(function (h) { return el('th', { text: h, class: /R²|RMSE|COD|PRD|total|Moved|Terms|Locks|^n$/.test(h) ? 'num' : '' }); }))]));
+    var tb = el('tbody');
+    cmp.entries.forEach(function (e, k) {
+      var s = e.stats, entry = entries[k].saved;
+      var isActive = k === 0 || (proj.model.sourceName && entry && entry.name === proj.model.sourceName);
+      var actions = entry ? [
+        el('button', { type: 'button', class: 'btn tiny', text: 'Use', onclick: function () { useSaved(entry); } }),
+        el('button', { type: 'button', class: 'btn tiny', text: 'Rename', onclick: function () { var n = prompt('New name:', entry.name); if (n) { if (proj.model.sourceName === entry.name) proj.model.sourceName = n.trim(); entry.name = n.trim(); save(); renderModel(); } } }),
+        el('button', { type: 'button', class: 'btn tiny danger', text: 'Delete', onclick: function () { if (!confirm('Delete saved model "' + entry.name + '"?')) return; proj.savedModels = proj.savedModels.filter(function (m) { return m.id !== entry.id; }); save(); renderModel(); } })
+      ] : [];
+      tb.appendChild(el('tr', { class: isActive && k > 0 ? 'active-model' : '' }, [
+        el('td', { text: e.name + (entry && entry.fit && entry.fit.n !== undefined ? '' : '') }),
+        el('td', { text: { linear: 'Linear', loglinear: 'Log-linear', loglog: 'Log-log' }[e.form] || '–' }),
+        el('td', { class: 'num', text: String(e.terms) }), el('td', { class: 'num', text: String(e.locks) }),
+        el('td', { class: 'num', text: s ? String(s.n) : '–' }), el('td', { class: 'num', text: s ? fmt(s.r2, 3) : '–' }), el('td', { class: 'num', text: s ? fmt(s.adjR2, 3) : '–' }),
+        el('td', { class: 'num', text: s ? money(s.rmse) : '–' }), el('td', { class: 'num', text: s && s.loocvRmse !== null ? money(s.loocvRmse) : '–' }),
+        el('td', { class: 'num', text: s ? fmt(s.cod, 1) + ' %' : '–' }), el('td', { class: 'num', text: s ? fmt(s.prd, 3) : '–' }),
+        el('td', { class: 'num', text: money(e.totals.improvement) }), el('td', { class: 'num', text: money(e.totals.total) }),
+        el('td', { class: 'num', text: k === 0 ? 'reference' : (e.movedShare === null ? '–' : fmt(e.movedShare * 100, 0) + ' % (' + e.moved + ')') }),
+        el('td', null, actions)
+      ]));
+    });
+    t.appendChild(tb);
+    box.appendChild(el('div', { class: 'table-scroll' }, [t]));
+    box.appendChild(el('p', { class: 'help', text: '"Moved > 10 %" counts properties whose total value under that model differs by more than 10 % from the current settings. R² on the fit scale is not comparable between log and linear forms; compare RMSE, LOO RMSE and COD.' }));
+    // weights matrix
+    var wm = Formula.weightsMatrix(entries, proj.currency);
+    var wt = el('table', { class: 'data compact compare-weights', id: 'compare-weights' });
+    wt.appendChild(el('thead', null, [el('tr', null, [el('th', { text: 'Term' })].concat(wm.names.map(function (n) { return el('th', { text: n }); })))]));
+    var wb = el('tbody');
+    wm.rows.forEach(function (r) {
+      wb.appendChild(el('tr', null, [el('td', { text: r.label })].concat(r.cells.map(function (c) {
+        return c ? el('td', { class: 'num' }, [c.text, el('span', { class: 'badge ' + c.code, text: c.label })]) : el('td', { class: 'num help', text: '–' });
+      }))));
+    });
+    wt.appendChild(wb);
+    box.appendChild(el('h3', { text: 'Weights side by side' }));
+    box.appendChild(el('div', { class: 'table-scroll' }, [wt]));
+  }
+
+  function exportComparison() {
+    var proj = state.project, entries = comparisonEntries();
+    var cmp = Valuation.compareModels(proj, entries, charsFor);
+    var stats = cmp.entries.map(function (e) { var s = e.stats || {}; return { Model: e.name, Form: e.form || '', Terms: e.terms, Locks: e.locks, n: s.n === undefined ? '' : s.n, R2: s.r2 === undefined ? '' : s.r2, AdjR2: s.adjR2 === undefined ? '' : s.adjR2, RMSE: s.rmse === undefined ? '' : Math.round(s.rmse), LOO_RMSE: s.loocvRmse === undefined || s.loocvRmse === null ? '' : Math.round(s.loocvRmse), COD: s.cod === undefined ? '' : s.cod, PRD: s.prd === undefined ? '' : s.prd, BuildingsTotal: Math.round(e.totals.improvement), AllTotal: Math.round(e.totals.total), Valued: e.totals.valued, MovedOver10pct: e.movedShare === null ? '' : e.movedShare, MovedCount: e.moved }; });
+    var wm = Formula.weightsMatrix(entries, proj.currency);
+    var wHeaders = ['Term'].concat(wm.names);
+    var wRows = wm.rows.map(function (r) { var o = { Term: r.label }; r.cells.forEach(function (c, k) { o[wm.names[k]] = c ? c.text + ' [' + c.label + ']' : ''; }); return o; });
+    var pHeaders = ['PlotNo', 'Description', 'LCC_Area', 'LandValue'];
+    entries.forEach(function (e) { pHeaders.push('Building_' + e.name, 'Total_' + e.name); });
+    var pRows = cmp.perProperty.map(function (r) { var o = { PlotNo: r.plotNo, Description: r.description, LCC_Area: r.areaId, LandValue: r.land === null ? '' : Math.round(r.land) }; entries.forEach(function (e, k) { o['Building_' + e.name] = r.values[k] === null ? '' : Math.round(r.values[k]); o['Total_' + e.name] = r.totals[k] === null ? '' : Math.round(r.totals[k]); }); return o; });
+    IO.downloadWorkbook('model_comparison.xlsx', [
+      { name: 'Statistics', rows: stats, headers: Object.keys(stats[0]) },
+      { name: 'Weights', rows: wRows, headers: wHeaders },
+      { name: 'Per property', rows: pRows, headers: pHeaders }
+    ]);
   }
 
   function weightsTable(fit, editable) {
@@ -632,13 +750,13 @@
       if (!editable && w.status === 'excluded') return;
       var cells = [el('td', { text: c.label + (isBase ? ' (base)' : '') })];
       if (editable) {
-        var incl = el('input', { type: 'checkbox', checked: w.status !== 'excluded', disabled: isBase || c.kind === 'intercept' || c.kind === 'area', onchange: function (e) { spec.included[c.key] = e.target.checked; fitModel(true); } });
+        var incl = el('input', { type: 'checkbox', checked: w.status !== 'excluded', disabled: isBase || c.kind === 'intercept' || c.kind === 'area', onchange: function (e) { spec.included[c.key] = e.target.checked; specChanged(); } });
         var lockChk = el('input', { type: 'checkbox', checked: w.status === 'locked', disabled: isBase || w.status === 'excluded', onchange: function (e) {
           if (e.target.checked) { var d = w.display; spec.locks[c.key] = d === null ? 0 : Math.round(d * 1000) / 1000; } else delete spec.locks[c.key];
-          fitModel(true);
+          specChanged();
         } });
         var lockVal = el('input', { type: 'number', step: 'any', class: 'short', disabled: w.status !== 'locked', value: w.status === 'locked' ? spec.locks[c.key] : '', onchange: function (e) {
-          var v = numOrNull(e.target.value); if (v === null) return; spec.locks[c.key] = v; fitModel(true);
+          var v = numOrNull(e.target.value); if (v === null) return; spec.locks[c.key] = v; specChanged();
         } });
         cells.push(el('td', { class: 'num', text: c.kind === 'category' ? String(w.count || 0) : '' }), el('td', null, [incl]),
           el('td', { class: 'num', text: w.status === 'excluded' ? '–' : w.weightText }), el('td', null, [lockChk]),
@@ -698,7 +816,7 @@
     if (!fit || !fit.ok) {
       lead.appendChild(el('p', null, [el('b', { text: 'The building model is not fitted yet. ' }), 'Enter the valuer\'s total value for a sample of properties on the Properties tab. Land values are already calculated from the rates.']));
     } else {
-      lead.appendChild(el('p', null, [el('b', { text: 'Model fitted on ' + fit.n + ' sample properties. ' }), 'Typical error of a building value on the sample: ' + money(fit.rmse) + (fit.loocvRmse !== null ? ' (' + money(fit.loocvRmse) + ' when each property is predicted without itself)' : '') + '. R² ' + fmt(fit.r2, 2) + '; median formula ÷ valuer ratio ' + fmt(fit.medianRatio, 2) + '; COD ' + fmt(fit.cod, 0) + ' %.']));
+      lead.appendChild(el('p', null, [el('b', { text: (proj.model.sourceName ? 'Active model: ' + proj.model.sourceName + '. ' : '') + 'Model fitted on ' + fit.n + ' sample properties. ' }), 'Typical error of a building value on the sample: ' + money(fit.rmse) + (fit.loocvRmse !== null ? ' (' + money(fit.loocvRmse) + ' when each property is predicted without itself)' : '') + '. R² ' + fmt(fit.r2, 2) + '; median formula ÷ valuer ratio ' + fmt(fit.medianRatio, 2) + '; COD ' + fmt(fit.cod, 0) + ' %.']));
       lead.appendChild(el('p', { class: 'help', text: Formula.formulaText(fit.form, 'Built area') + '. Land value = rate per m² × parcel area. Total = land + buildings.' }));
     }
     lead.appendChild(el('p', { class: 'help', text: 'Land rates by ' + (proj.landRates.level === 'sector' ? 'Sector' : 'Area') + (numOrNull(proj.landRates.upliftFactor) !== 1 ? ', uplift factor ' + fmt(proj.landRates.upliftFactor, 2) : ', no uplift') + (totals.defaults ? '; ' + totals.defaults + ' properties use the default rate' : '') + '.' }));
@@ -790,6 +908,12 @@
       Formula.weightsTable(fit, proj.currency).forEach(function (w) { if (w.status === 'excluded') return; h.push('<tr><td>' + esc(w.column.label) + (w.column.isBase ? ' (base)' : '') + '</td><td class="num">' + (w.column.kind === 'category' ? w.count : '') + '</td><td class="num">' + esc(w.weightText) + '</td><td class="num">' + (w.se === null ? '–' : fmt(w.se, 4)) + '</td><td class="num">' + esc(Formula.fmtP(w.p)) + '</td><td>' + esc(w.significance.label) + '</td></tr>'); });
       h.push('</table>');
       if (fit.warnings.length) h.push('<p><b>Checks:</b></p><ul>' + fit.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
+    }
+    if (proj.savedModels && proj.savedModels.length) {
+      var cmpR = Valuation.compareModels(proj, comparisonEntries(), charsFor);
+      h.push('<h2>Alternative models considered</h2><table><tr><th>Model</th><th>Form</th><th class="num">n</th><th class="num">R²</th><th class="num">RMSE</th><th class="num">COD</th><th class="num">All total</th></tr>');
+      cmpR.entries.forEach(function (e) { var s = e.stats; h.push('<tr><td>' + esc(e.name) + '</td><td>' + esc(e.form || '') + '</td><td class="num">' + (s ? s.n : '') + '</td><td class="num">' + (s ? fmt(s.r2, 3) : '') + '</td><td class="num">' + (s ? fmt(s.rmse, 0) : '') + '</td><td class="num">' + (s ? fmt(s.cod, 1) + ' %' : '') + '</td><td class="num">' + fmt(e.totals.total, 0) + '</td></tr>'); });
+      h.push('</table>');
     }
     var rows = rollRows(); var n = rows.filter(function (r) { return r.v.total !== null; }).length;
     h.push('<h2>Application</h2><p>' + n + ' of ' + rows.length + ' properties receive a formula value. Land, improvement and total values are reported separately in the exported roll (Local Government Act s.68(1)). Each property has a calculation sheet that shows every step.</p>');
@@ -1086,6 +1210,6 @@
     }).catch(function () { state.project = newProject(); renderAll(); });
   }
 
-  window.App = { state: state, fitModel: fitModel, valueOf: valueOf, rollExportRows: rollExportRows, weightsExportRows: weightsExportRows, ratesExportRows: ratesExportRows, showTab: showTab, setMode: setMode, renderAll: renderAll, locateAll: locateAll };
+  window.App = { state: state, fitModel: fitModel, valueOf: valueOf, rollExportRows: rollExportRows, weightsExportRows: weightsExportRows, ratesExportRows: ratesExportRows, showTab: showTab, setMode: setMode, renderAll: renderAll, locateAll: locateAll, saveCurrentModel: saveCurrentModel };
   document.addEventListener('DOMContentLoaded', init);
 }());

@@ -197,10 +197,29 @@
     return out;
   }
 
+  /*
+   * Weights of several models side by side. entries: [{ name, fit }].
+   * Returns { names, rows: [{ key, label, cells: [{ text, code, label } | null] }] }
+   * Terms follow the order of the first model, then any extra terms of the others.
+   */
+  function weightsMatrix(entries, currency) {
+    var rows = [], index = {};
+    entries.forEach(function (e, k) {
+      if (!e.fit || !e.fit.ok) return;
+      weightsTable(e.fit, currency).forEach(function (w) {
+        if (w.status === 'excluded') return;
+        var key = w.column.key;
+        if (!index[key]) { index[key] = rows.length; rows.push({ key: key, label: w.column.label + (w.column.isBase ? ' (base)' : ''), cells: entries.map(function () { return null; }) }); }
+        rows[index[key]].cells[k] = { text: w.weightText, code: w.significance.code, label: w.significance.label };
+      });
+    });
+    return { names: entries.map(function (e) { return e.name; }), rows: rows };
+  }
+
   return {
     fmtNum: fmtNum, fmtMoney: fmtMoney, fmtPct: fmtPct, fmtP: fmtP, fmtWeight: fmtWeight,
     significance: significance, formulaText: formulaText, formDescription: formDescription,
     weightsTable: weightsTable, calculationSheet: calculationSheet, fitSummary: fitSummary,
-    landSheet: landSheet, methodStatement: methodStatement
+    landSheet: landSheet, methodStatement: methodStatement, weightsMatrix: weightsMatrix
   };
 }));

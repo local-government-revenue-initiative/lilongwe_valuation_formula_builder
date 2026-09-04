@@ -100,6 +100,29 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   await page.selectOption('#form-select', 'loglinear');
   await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglinear');
 
+  // ---- saved models and comparison ---------------------------------------
+  page.once('dialog', d => d.accept('Log-linear, fence locked'));
+  await page.click('#btn-save-model');
+  await page.waitForSelector('#compare-stats');
+  assert.equal(await page.$$eval('#compare-stats tbody tr', r => r.length), 2, 'current + one saved model');
+  await page.selectOption('#form-select', 'loglog');
+  await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglog' && window.App.state.project.model.sourceName === null);
+  page.once('dialog', d => d.accept('Log-log'));
+  await page.click('#btn-save-model');
+  await page.waitForFunction(() => document.querySelectorAll('#compare-stats tbody tr').length === 3);
+  assert.equal(await page.$$eval('#compare-weights thead th', r => r.length), 4, 'term column + three models');
+  const moved = await page.$$eval('#compare-stats tbody tr', rows => rows.map(r => r.children[13].textContent));
+  assert.equal(moved[0], 'reference');
+  assert.ok(/%/.test(moved[1]) && /%/.test(moved[2]), 'moved share shown for saved models');
+  // "Use" the first saved model: form goes back to log-linear with the fence lock
+  await page.locator('#compare-stats tbody tr').nth(1).locator('button', { hasText: 'Use' }).click();
+  await page.waitForFunction(() => window.App.state.project.model.fit.form === 'loglinear' && window.App.state.project.model.sourceName === 'Log-linear, fence locked');
+  assert.ok(await page.evaluate(() => window.App.state.project.model.locks['f:fence'] === 10), 'lock restored from the saved model');
+  const [cmpDownload] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-comparison')]);
+  assert.equal(cmpDownload.suggestedFilename(), 'model_comparison.xlsx');
+  await page.click('.tabs button[data-tab="results"]');
+  await page.waitForFunction(() => /Active model: Log-linear, fence locked/.test(document.querySelector('#results-summary').textContent));
+
   // ---- export ------------------------------------------------------------
   await page.click('.tabs button[data-tab="results"]');
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#btn-export-roll-csv')]);
@@ -140,6 +163,7 @@ const SAMPLE = path.join(ROOT, 'examples', 'sample_properties.csv');
   assert.ok(await page.evaluate(() => window.App.state.project.model.fit && window.App.state.project.model.fit.ok), 'fitted model survives reload');
   assert.equal(await page.evaluate(() => window.App.state.project.mode), 'advanced', 'mode persists');
   assert.equal(await page.evaluate(() => window.App.state.project.landRates.areas['3'].rate), 8784, 'edited rate persists');
+  assert.equal(await page.evaluate(() => window.App.state.project.savedModels.length), 2, 'saved models persist');
 
   assert.deepEqual(errors, [], 'no page errors');
   await browser.close();

@@ -123,6 +123,33 @@ test('valueProperty combines land and model, flags default rates and partial tot
   assert.ok(w.flags.some(f => /default land rate/.test(f)) && w.flags.some(f => /no built area/.test(f)) && w.flags.some(f => /partial/.test(f)));
 });
 
+test('compareModels reports totals, moved share and per-property values', () => {
+  const proj = project({
+    properties: [
+      { id: 'a', plotNo: 'A', areaId: 3, landArea_m2: 10, builtArea_m2: 100, characteristics: {} },
+      { id: 'b', plotNo: 'B', areaId: 3, landArea_m2: 10, builtArea_m2: 200, characteristics: {} },
+      { id: 'c', plotNo: 'C', areaId: 3, landArea_m2: 10, builtArea_m2: null, characteristics: {} }
+    ]
+  });
+  const columns = Engine.buildColumns('linear', [], [], 'Built area');
+  const mk = (coef) => ({ ok: true, form: 'linear', columns, coef, smearing: 1, status: ['free', 'free'], n: 5, r2: 0.9, adjR2: 0.88, rmse: 10, loocvRmse: 12, cod: 5, prd: 1, medianRatio: 1 });
+  const same = mk([1000, 500]);
+  const other = mk([1000, 600]); // +20 % on the area term
+  const cmp = Valuation.compareModels(proj, [{ id: 'cur', name: 'Current', fit: same }, { id: 's', name: 'Same', fit: same }, { id: 'o', name: 'Other', fit: other }]);
+  assert.equal(cmp.entries.length, 3);
+  // land 43,920 each for a and b and c; buildings 51,000 and 101,000 under Current
+  assert.equal(cmp.entries[0].totals.improvement, 51000 + 101000);
+  assert.equal(cmp.entries[0].totals.land, 3 * 43920);
+  assert.equal(cmp.entries[0].totals.valued, 3);
+  assert.equal(cmp.entries[1].movedShare, 0, 'identical model moves nothing');
+  // Other: a → 61,000 (+10,000 on 94,920 = 10.5 %), b → 121,000 (+20,000 on 144,920 = 13.8 %); c has no building value, so it is compared but unchanged
+  assert.equal(cmp.entries[2].moved, 2);
+  assert.equal(cmp.entries[2].compared, 3);
+  assert.ok(Math.abs(cmp.entries[2].movedShare - 2 / 3) < 1e-12);
+  assert.deepEqual(cmp.perProperty.map(r => r.values[2]), [61000, 121000, null]);
+  assert.equal(cmp.entries[0].terms, 2);
+});
+
 test('a version-1 project migrates to the single-model layout', () => {
   const old = { version: 1, models: { land: {}, improvement: { form: 'loglog', locks: { 'f:fence': 10 } } }, properties: [{ id: 'x', landValue: 100, improvementValue: 250 }, { id: 'y', totalValueEntered: 900 }] };
   const p = Valuation.migrateProject(old, DEFAULTS);
@@ -134,4 +161,5 @@ test('a version-1 project migrates to the single-model layout', () => {
   assert.equal(p.properties[0].landValue, undefined);
   assert.ok(p.landRates.areas['3']);
   assert.equal(p.mode, 'simple');
+  assert.deepEqual(p.savedModels, []);
 });
